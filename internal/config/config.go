@@ -3,7 +3,9 @@ package config
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +75,10 @@ type Matrix struct {
 	PreferredCountries []string `json:"preferredCountries"`
 	PreferredASNs      []string `json:"preferredAsns"`
 	Sources            []string `json:"sources"`
+	SubscriptionListen string   `json:"subscriptionListen"`
+	SubscriptionToken  string   `json:"subscriptionToken"`
+	SubscriptionPath   string   `json:"subscriptionPath"`
+	PublicSocksHost    string   `json:"publicSocksHost"`
 }
 
 func (m *Matrix) applyDefaults() {
@@ -106,6 +112,23 @@ func (m *Matrix) applyDefaults() {
 	if len(m.Sources) == 0 {
 		m.Sources = []string{"https://www.vpngate.net/api/iphone/", "http://www.vpngate.net/api/iphone/"}
 	}
+	if m.SubscriptionListen == "" {
+		m.SubscriptionListen = ":8090"
+	}
+	if m.SubscriptionPath == "" {
+		m.SubscriptionPath = "/pgws"
+	}
+}
+
+// SubscriptionTokenValue returns the secret that guards subscription URLs. When
+// no explicit token is configured it is derived from the API key so enabling
+// the subscription never ships a well-known default.
+func (m Matrix) SubscriptionTokenValue() string {
+	if m.SubscriptionToken != "" {
+		return m.SubscriptionToken
+	}
+	sum := sha256.Sum256([]byte(m.APIKey))
+	return hex.EncodeToString(sum[:12])
 }
 
 func (m Matrix) HarvestDuration() (time.Duration, error) {
@@ -474,6 +497,23 @@ func applyEnvironmentOverrides(value *Config) {
 	}
 	if interval := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_ROTATE_INTERVAL")); interval != "" {
 		value.Matrix.RotateInterval = interval
+	}
+	if listen := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_SUB_LISTEN")); listen != "" {
+		switch strings.ToLower(listen) {
+		case "off", "false", "disabled", "-":
+			value.Matrix.SubscriptionListen = ""
+		default:
+			value.Matrix.SubscriptionListen = listen
+		}
+	}
+	if token := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_SUB_TOKEN")); token != "" {
+		value.Matrix.SubscriptionToken = token
+	}
+	if path := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_SUB_PATH")); path != "" {
+		value.Matrix.SubscriptionPath = path
+	}
+	if host := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_PUBLIC_SOCKS_HOST")); host != "" {
+		value.Matrix.PublicSocksHost = host
 	}
 }
 

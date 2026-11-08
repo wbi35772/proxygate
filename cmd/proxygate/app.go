@@ -19,6 +19,7 @@ import (
 	service_socks5 "github.com/ExpTechTW/proxygate/internal/service/socks5"
 	service_speedtest "github.com/ExpTechTW/proxygate/internal/service/speedtest"
 	"github.com/ExpTechTW/proxygate/internal/store"
+	"github.com/ExpTechTW/proxygate/internal/subscription"
 	"github.com/ExpTechTW/proxygate/internal/vpn"
 	"github.com/ExpTechTW/proxygate/internal/vpngate"
 )
@@ -76,6 +77,7 @@ func appStart(args arguments, logger *log.Logger) error {
 		logger.Printf("[service:%s] started", backgroundService.Name())
 	}
 
+	var subscriptionServer *subscription.Server
 	if configStore.Get().Matrix.Enabled {
 		if err := matrixManager.Start(); err != nil {
 			cancelApp()
@@ -84,6 +86,18 @@ func appStart(args arguments, logger *log.Logger) error {
 			_ = manager.Close()
 			_ = database.Close()
 			return fmt.Errorf("start matrix gateway: %w", err)
+		}
+		if configStore.Get().Matrix.SubscriptionListen != "" {
+			subscriptionServer = subscription.New(configStore, matrixManager, logger)
+			if err := subscriptionServer.Start(); err != nil {
+				cancelApp()
+				_ = stopServices(context.Background(), started, logger)
+				_ = matrixManager.Close()
+				_ = manager.Close()
+				_ = database.Close()
+				return fmt.Errorf("start subscription gateway: %w", err)
+			}
+			logger.Printf("[subscription] listening on %s (websocket path %s)", configStore.Get().Matrix.SubscriptionListen, configStore.Get().Matrix.SubscriptionPath)
 		}
 	}
 
@@ -149,6 +163,11 @@ func appStart(args arguments, logger *log.Logger) error {
 	}
 	if err := stopServices(shutdownCtx, started, logger); err != nil {
 		shutdownErrors = append(shutdownErrors, err)
+	}
+	if subscriptionServer != nil {
+		if err := subscriptionServer.Stop(shutdownCtx); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("stop subscription gateway: %w", err))
+		}
 	}
 	if err := matrixManager.Close(); err != nil {
 		shutdownErrors = append(shutdownErrors, fmt.Errorf("close matrix gateway: %w", err))

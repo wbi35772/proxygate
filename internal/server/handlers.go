@@ -154,6 +154,7 @@ func (s *Server) getConfig(c fiber.Ctx) error {
 	settings.Web.SessionSecret = ""
 	settings.Matrix.APIKey = ""
 	settings.Matrix.Password = ""
+	settings.Matrix.SubscriptionToken = ""
 	return writeJSON(c, fiber.StatusOK, settings)
 }
 
@@ -176,6 +177,9 @@ func (s *Server) putConfig(c fiber.Ctx) error {
 	}
 	if input.Config.Matrix.Password == "" {
 		input.Config.Matrix.Password = current.Matrix.Password
+	}
+	if input.Config.Matrix.SubscriptionToken == "" {
+		input.Config.Matrix.SubscriptionToken = current.Matrix.SubscriptionToken
 	}
 	if input.NewPassword != "" {
 		if len(input.NewPassword) < 8 {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -239,6 +240,51 @@ func (m *Manager) Stats(ctx context.Context) (Stats, error) {
 }
 
 func (m *Manager) AfterHarvest(context.Context) {}
+
+func (m *Manager) slotByID(slotID int) (*Slot, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	slot, exists := m.slots[slotID]
+	return slot, exists
+}
+
+// SlotStatusByID reports a single slot without copying the whole registry.
+func (m *Manager) SlotStatusByID(slotID int) (SlotStatus, bool) {
+	slot, exists := m.slotByID(slotID)
+	if !exists {
+		return SlotStatus{}, false
+	}
+	return slot.Status(), true
+}
+
+// DialSlot connects through the VPN tunnel that belongs to one slot. The
+// subscription server uses it for VLESS because the per-slot SOCKS5 listeners
+// are not reachable from outside the sandbox on the free Instabox plan.
+func (m *Manager) DialSlot(ctx context.Context, slotID int, network, address string) (net.Conn, error) {
+	slot, exists := m.slotByID(slotID)
+	if !exists {
+		return nil, ErrNotFound
+	}
+	return slot.DialContext(ctx, network, address)
+}
+
+// ListenSlotPacket opens a datagram socket on the slot tunnel for VLESS UDP.
+func (m *Manager) ListenSlotPacket(slotID int, network, address string) (net.PacketConn, error) {
+	slot, exists := m.slotByID(slotID)
+	if !exists {
+		return nil, ErrNotFound
+	}
+	return slot.ListenPacket(network, address)
+}
+
+// ResolveSlotIPv4 resolves a destination through the slot VPN tunnel.
+func (m *Manager) ResolveSlotIPv4(ctx context.Context, slotID int, host string) ([]net.IP, error) {
+	slot, exists := m.slotByID(slotID)
+	if !exists {
+		return nil, ErrNotFound
+	}
+	return slot.ResolveIPv4(ctx, host)
+}
 
 func (m *Manager) Enabled() bool {
 	return m.config.Get().Matrix.Enabled

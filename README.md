@@ -119,6 +119,25 @@ Generated files:
 
 The tunnel forwards every allocated slot port to `127.0.0.1`; SOCKS5 clients use `127.0.0.1:108xx` with the slot username and the matrix password. SSH forwards TCP only, so QUIC/UDP does not traverse the tunnel; disable QUIC in the browser or let it fall back to TCP. Slot allocations live in memory, so after a container restart re-run the script (with `-Allocate`) to rebuild the node list.
 
+### Subscriptions (v2rayN / Clash Verge)
+
+The gateway also exposes VLESS-over-WebSocket nodes and native subscriptions, so no SSH tunnel is needed on the client. The subscription listener is plain HTTP on `matrix.subscriptionListen` (default `:8090`); TLS is terminated by whatever public endpoint forwards to it, such as an Instabox published port.
+
+| Setting | Env | Meaning |
+| --- | --- | --- |
+| `subscriptionListen` | `PROXYGATE_MATRIX_SUB_LISTEN` | Listener address; empty/`off` disables the feature |
+| `subscriptionToken` | `PROXYGATE_MATRIX_SUB_TOKEN` | Secret in subscription URLs; derived from the API key when empty |
+| `subscriptionPath` | `PROXYGATE_MATRIX_SUB_PATH` | WebSocket path for VLESS (default `/pgws`) |
+| `publicHost` | `PROXYGATE_MATRIX_PUBLIC_HOST` | Host and SNI written into node links; required behind a proxy |
+| `publicSocksHost` | `PROXYGATE_MATRIX_PUBLIC_SOCKS_HOST` | Host shown in SOCKS5 URLs; defaults to `127.0.0.1` |
+
+Each allocated slot becomes one node. Its UUID is derived from the subscription token and the slot id, so client credentials survive restarts:
+
+- v2rayN: `https://PUBLIC_HOST/sub/TOKEN/v2ray` (base64 link list)
+- Clash Verge / Mihomo: `https://PUBLIC_HOST/sub/TOKEN/clash` (profile YAML with a `ProxyGate` group)
+
+`https://PUBLIC_HOST/sub/TOKEN` picks the format from the user agent, and `GET /healthz` on the listener reports liveness. Allocated slots appear immediately; unallocated slots stay out of the list until `POST /api/v1/pool/allocate` creates them. Keep the token private: it doubles as the VLESS credential.
+
 Tags such as `v0.1.0` produce GitHub release archives and a multi-platform image in the repository's GHCR package. Pre-release tags such as `v0.1.0-rc.1` are marked accordingly and do not overwrite `latest`.
 
 ## Configuration

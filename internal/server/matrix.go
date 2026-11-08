@@ -36,7 +36,7 @@ func (s *Server) poolAuth(c fiber.Ctx) error {
 func (s *Server) poolSlots(c fiber.Ctx) error {
 	statuses, _ := s.matrix.Status()
 	settings := s.config.Get()
-	host := s.publicHost(c)
+	host := s.socksHost()
 	slots := make([]poolSlotResponse, 0, len(statuses))
 	for index := range statuses {
 		slots = append(slots, s.poolSlot(host, statuses[index]))
@@ -73,7 +73,7 @@ func (s *Server) poolAllocate(c fiber.Ctx) error {
 	}
 	return writeJSON(c, status, map[string]any{
 		"created": created,
-		"slot":    s.poolSlot(s.publicHost(c), slot.Status()),
+		"slot":    s.poolSlot(s.socksHost(), slot.Status()),
 	})
 }
 
@@ -95,7 +95,7 @@ func (s *Server) poolRotate(c fiber.Ctx) error {
 	statuses, _ := s.matrix.Status()
 	for _, status := range statuses {
 		if status.SlotID == slotID {
-			return writeJSON(c, fiber.StatusAccepted, map[string]any{"slot": s.poolSlot(s.publicHost(c), status)})
+			return writeJSON(c, fiber.StatusAccepted, map[string]any{"slot": s.poolSlot(s.socksHost(), status)})
 		}
 	}
 	return writeJSON(c, fiber.StatusAccepted, map[string]any{"slotId": slotID, "state": matrix.StateSwitching})
@@ -111,11 +111,11 @@ func (s *Server) poolStats(c fiber.Ctx) error {
 	return writeJSON(c, fiber.StatusOK, stats)
 }
 
-func (s *Server) publicHost(c fiber.Ctx) string {
-	if host := s.config.Get().Matrix.PublicHost; host != "" {
+func (s *Server) socksHost() string {
+	if host := s.config.Get().Matrix.PublicSocksHost; host != "" {
 		return host
 	}
-	return c.Hostname()
+	return "127.0.0.1"
 }
 
 func (s *Server) poolSlot(host string, status matrix.SlotStatus) poolSlotResponse {
