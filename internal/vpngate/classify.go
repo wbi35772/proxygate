@@ -37,12 +37,23 @@ var carrierKeywords = []string{
 // a hosting keyword still demotes them.
 func Classify(node *model.Node) {
 	operator := strings.TrimSpace(node.Operator)
-	node.ASNOrg = operator
-	if match := asnPattern.FindStringSubmatch(operator); match != nil {
-		node.ASN = strings.ToUpper(match[1])
-		node.ASNOrg = strings.TrimSpace(match[2])
+	if node.ASNOrg == "" || strings.EqualFold(node.ASNOrg, operator) {
+		node.ASNOrg = operator
 	}
-	lower := strings.ToLower(operator)
+	if node.ASN == "" {
+		if match := asnPattern.FindStringSubmatch(operator); match != nil {
+			node.ASN = strings.ToUpper(match[1])
+			node.ASNOrg = strings.TrimSpace(match[2])
+		}
+	}
+	ClassifyResidential(node)
+}
+
+// ClassifyResidential tags a node from its operator label and resolved network
+// name. Unknown networks are treated as residential because VPN Gate nodes are
+// volunteer endpoints, while a hosting keyword still demotes them.
+func ClassifyResidential(node *model.Node) {
+	lower := strings.ToLower(strings.TrimSpace(node.Operator + " " + node.ASNOrg))
 	residential := true
 	for _, keyword := range carrierKeywords {
 		if strings.Contains(lower, keyword) {

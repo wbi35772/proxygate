@@ -25,10 +25,11 @@ type Refresher struct {
 	lastErr  error
 	activeIP func() string
 	after    func(context.Context)
+	asn      *ASNResolver
 }
 
 func NewRefresher(configStore *config.Store, database *store.Store, logger *log.Logger, activeIP func() string, after func(context.Context)) *Refresher {
-	return &Refresher{config: configStore, store: database, client: NewClient(), logger: logger, trigger: make(chan struct{}, 1), activeIP: activeIP, after: after}
+	return &Refresher{config: configStore, store: database, client: NewClient(), logger: logger, trigger: make(chan struct{}, 1), activeIP: activeIP, after: after, asn: NewASNResolver()}
 }
 
 func (r *Refresher) Trigger() bool {
@@ -124,12 +125,18 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 		return err
 	}
 	nodes := make([]model.Node, 0, len(merged))
-	residential := 0
 	for _, node := range merged {
+		nodes = append(nodes, node)
+	}
+	if settings.Matrix.Enabled && r.asn != nil {
+		enriched := r.asn.Enrich(ctx, nodes, 8)
+		r.logger.Printf("[refresh] ASN enrichment=%d", enriched)
+	}
+	residential := 0
+	for _, node := range nodes {
 		if node.Residential {
 			residential++
 		}
-		nodes = append(nodes, node)
 	}
 	preserveIP := ""
 	if r.activeIP != nil {
