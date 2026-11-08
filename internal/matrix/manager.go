@@ -38,6 +38,8 @@ type SlotStatus struct {
 	Country      string    `json:"country,omitempty"`
 	State        string    `json:"state"`
 	ActiveIP     string    `json:"activeIp,omitempty"`
+	NodeIP       string    `json:"nodeIp,omitempty"`
+	ExitIP       string    `json:"exitIp,omitempty"`
 	CountryShort string    `json:"countryShort,omitempty"`
 	ASN          string    `json:"asn,omitempty"`
 	ASNOrg       string    `json:"asnOrg,omitempty"`
@@ -62,10 +64,11 @@ type Manager struct {
 	logger   *log.Logger
 	drivers  []vpn.Driver
 
-	mu      sync.RWMutex
-	slots   map[int]*Slot
-	active  map[string]int
-	started bool
+	mu          sync.RWMutex
+	slots       map[int]*Slot
+	activeNodes map[string]int
+	activeExits map[string]int
+	started     bool
 }
 
 func NewManager(parent context.Context, configStore *config.Store, database *store.Store, logger *log.Logger, drivers []vpn.Driver) *Manager {
@@ -77,8 +80,9 @@ func NewManager(parent context.Context, configStore *config.Store, database *sto
 		database: database,
 		logger:   logger,
 		drivers:  drivers,
-		slots:    make(map[int]*Slot),
-		active:   make(map[string]int),
+		slots:       make(map[int]*Slot),
+		activeNodes: make(map[string]int),
+		activeExits: make(map[string]int),
 	}
 }
 
@@ -118,7 +122,8 @@ func (m *Manager) Close() error {
 		slots = append(slots, slot)
 	}
 	m.slots = make(map[int]*Slot)
-	m.active = make(map[string]int)
+	m.activeNodes = make(map[string]int)
+	m.activeExits = make(map[string]int)
 	m.mu.Unlock()
 	var result error
 	for _, slot := range slots {
@@ -252,30 +257,57 @@ func (m *Manager) supportsProtocol(protocol string) bool {
 	return false
 }
 
-func (m *Manager) reserveIP(ip string, slotID int) bool {
+func (m *Manager) reserveNodeIP(ip string, slotID int) bool {
+	return m.reserveIP(m.activeNodes, ip, slotID)
+}
+
+func (m *Manager) reserveExitIP(ip string, slotID int) bool {
+	return m.reserveIP(m.activeExits, ip, slotID)
+}
+
+func (m *Manager) reserveIP(active map[string]int, ip string, slotID int) bool {
+	if ip == "" {
+		return true
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if owner, exists := m.active[ip]; exists && owner != slotID {
+	if owner, exists := active[ip]; exists && owner != slotID {
 		return false
 	}
-	m.active[ip] = slotID
+	active[ip] = slotID
 	return true
 }
 
-func (m *Manager) releaseIP(ip string, slotID int) {
+func (m *Manager) releaseNodeIP(ip string, slotID int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if owner, exists := m.active[ip]; exists && owner == slotID {
-		delete(m.active, ip)
+	if owner, exists := m.activeNodes[ip]; exists && owner == slotID {
+		delete(m.activeNodes, ip)
+	}
+}
+
+func (m *Manager) releaseExitIP(ip string, slotID int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if owner, exists := m.activeExits[ip]; exists && owner == slotID {
+		delete(m.activeExits, ip)
 	}
 }
 
 func (m *Manager) excludeIPs(slotID int) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	result := make([]string, 0, len(m.active))
-	for ip, owner := range m.active {
-		if owner != slotID {
+	seen := make(map[string]struct{}, len(m.activeNodes)+len(m.activeExits))
+	result := make([]string, 0, len(seen))
+	for _, active := range []map[string]int{m.activeNodes, m.activeExits} {
+		for ip, owner := range active {
+			if owner == slotID {
+				continue
+			}
+			if _, exists := seen[ip]; exists {
+				continue
+			}
+			seen[ip] = struct{}{}
 			result = append(result, ip)
 		}
 	}
