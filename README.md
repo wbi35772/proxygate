@@ -88,7 +88,7 @@ Slot credentials are `slot_01` … `slot_35` with `matrix.password`; authenticat
 - `sticky` keeps the exit IP for the life of the tunnel. On failure it retries the same node, then the same country and ASN, then the same country; requests wait during the switch and never fall back to a direct connection.
 - `rotating` switches to a new exit IP when a new SOCKS5 connection arrives after `matrix.rotateInterval`.
 
-The harvester polls every configured source every `matrix.harvestInterval` (default `3m`), classifies residential versus hosting ASNs, and keeps nodes seen within `matrix.nodeTtl` (default `6h`). `matrix.residentialOnly` hides hosting ASNs from allocation; by default they are tagged and merely ranked lower. Preferred countries and ASN keywords are configurable.
+The harvester polls every configured source every `matrix.harvestInterval` (default `3m`), resolves each exit address to its real origin ASN and network name through Team Cymru's DNS service, classifies residential versus hosting networks, and keeps nodes seen within `matrix.nodeTtl` (default `6h`). VPN Gate's own `Operator` field is a volunteer display name and is not used as an ISP tag. `matrix.residentialOnly` hides hosting ASNs from allocation; by default they are tagged and merely ranked lower. Preferred countries and ASN keywords are configurable.
 
 Use `scripts/shardx-slots.py` to allocate slots and emit ready-to-import SOCKS5 profiles for ShardX:
 
