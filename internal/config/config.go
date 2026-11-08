@@ -452,7 +452,7 @@ func applyEnvironmentOverrides(value *Config) {
 		}
 	}
 	if address := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_LISTEN_ADDRESS")); address != "" {
-		value.ListenAddress = address
+		value.Matrix.ListenAddress = address
 	}
 	if host := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_PUBLIC_HOST")); host != "" {
 		value.Matrix.PublicHost = host
