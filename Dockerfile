@@ -49,5 +49,5 @@ ENV PROXYGATE_WEB_LISTEN_ADDRESS="[::]:8080" \
     PROXYGATE_DATABASE_PATH="/data/proxygate.db"
 WORKDIR /data
 VOLUME ["/data"]
-EXPOSE 8080 1080
+EXPOSE 8080 1080 10801-10835
 ENTRYPOINT ["/proxygate", "-config", "/data/config.json"]

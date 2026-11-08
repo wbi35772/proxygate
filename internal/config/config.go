@@ -463,6 +463,9 @@ func applyEnvironmentOverrides(value *Config) {
 	if key := os.Getenv("PROXYGATE_MATRIX_API_KEY"); key != "" {
 		value.Matrix.APIKey = key
 	}
+	if key := os.Getenv("PROXYGATE_API_KEY"); key != "" {
+		value.Matrix.APIKey = key
+	}
 	if interval := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_HARVEST_INTERVAL")); interval != "" {
 		value.Matrix.HarvestInterval = interval
 	}

@@ -59,6 +59,46 @@ docker run --rm -p 8080:8080 -v proxygate-data:/data proxygate
 
 The container stores its generated configuration and SQLite database in `/data`. The first-run web password is printed by `docker logs`. The Docker default keeps SOCKS5 on `127.0.0.1:1080` inside the container; expose it externally only when required by overriding `PROXYGATE_SOCKS5_LISTEN_ADDRESS` and publishing port `1080`. The listen addresses and database path can be overridden with `PROXYGATE_WEB_LISTEN_ADDRESS`, `PROXYGATE_SOCKS5_LISTEN_ADDRESS`, and `PROXYGATE_DATABASE_PATH`.
 
+## Matrix gateway
+
+The matrix mode turns one ProxyGate instance into up to 255 isolated exit slots. Every allocated slot owns its own VPN tunnel and its own SOCKS5 listener, so concurrent fingerprint-browser profiles never share an exit IP. Slot `N` listens on `matrix.portStart + N - 1` (default `10801` for slot 1).
+
+```sh
+cp .env.example .env   # then edit the three secrets
+docker compose up -d --build
+curl -H "Authorization: Bearer $PROXYGATE_API_KEY" \
+  -X POST -H 'Content-Type: application/json' \
+  -d '{"country":"JP","protocol":"openvpn_tcp","mode":"sticky"}' \
+  http://127.0.0.1:8080/api/v1/pool/allocate
+```
+
+`docker-compose.yml` publishes the web UI on `8080` and slots `1-35` on `10801-10835` for both TCP and UDP. Set `PROXYGATE_MATRIX_PUBLIC_HOST` to the address that clients should use in returned `socks5://` URLs; otherwise the API uses the request hostname.
+
+Pool endpoints (`Authorization: Bearer PROXYGATE_API_KEY`):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/pool/slots` | Slot state, active/node/exit IP, SOCKS5 URL |
+| `POST` | `/api/v1/pool/allocate` | Allocate or reconfigure `{country,protocol,mode,slot_id}` |
+| `POST` | `/api/v1/pool/rotate/{slot_id}` | Force a new exit IP, never the current one |
+| `GET` | `/api/v1/pool/nodes/stats` | Residential pool counts by country and protocol |
+
+Slot credentials are `slot_01` … `slot_35` with `matrix.password`; authentication is always required. Modes:
+
+- `sticky` keeps the exit IP for the life of the tunnel. On failure it retries the same node, then the same country and ASN, then the same country; requests wait during the switch and never fall back to a direct connection.
+- `rotating` switches to a new exit IP when a new SOCKS5 connection arrives after `matrix.rotateInterval`.
+
+The harvester polls every configured source every `matrix.harvestInterval` (default `3m`), classifies residential versus hosting ASNs, and keeps nodes seen within `matrix.nodeTtl` (default `6h`). `matrix.residentialOnly` hides hosting ASNs from allocation; by default they are tagged and merely ranked lower. Preferred countries and ASN keywords are configurable.
+
+Use `scripts/shardx-slots.py` to allocate slots and emit ready-to-import SOCKS5 profiles for ShardX:
+
+```sh
+PROXYGATE_API=http://127.0.0.1:8080 PROXYGATE_API_KEY=secret \
+  python3 scripts/shardx-slots.py --count 5 --country JP --protocol openvpn_tcp --mode sticky --wait
+```
+
+The matrix API listens outside the web cookie session and is disabled (HTTP 503) unless `matrix.enabled` is true. Keep `PROXYGATE_API_KEY` out of client machines; only the SOCKS5 credentials per slot are needed there.
+
 Tags such as `v0.1.0` produce GitHub release archives and a multi-platform image in the repository's GHCR package. Pre-release tags such as `v0.1.0-rc.1` are marked accordingly and do not overwrite `latest`.
 
 ## Configuration
