@@ -3,12 +3,14 @@ import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
 
 import enUS from './locales/en-US.json'
+import zhCN from './locales/zh-CN.json'
 import zhTW from './locales/zh-TW.json'
 
 export const localeConfig = {
-  fallback: 'en-US',
+  fallback: 'zh-CN',
   storageKey: 'proxygate:locale',
   resources: {
+    'zh-CN': { label: '简体中文', translation: zhCN },
     'en-US': { label: 'English', translation: enUS },
     'zh-TW': { label: '正體中文', translation: zhTW },
   },
@@ -27,7 +29,7 @@ void i18n
     supportedLngs: Object.keys(localeConfig.resources),
     detection: {
       caches: ['localStorage'],
-      order: ['localStorage', 'navigator'],
+      order: ['localStorage'],
     },
     interpolation: { escapeValue: false },
   })
