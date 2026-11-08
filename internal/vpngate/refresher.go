@@ -142,7 +142,16 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	if r.activeIP != nil {
 		preserveIP = r.activeIP()
 	}
-	if err := r.store.UpsertNodes(ctx, nodes, refreshedAt, preserveIP); err != nil {
+	legacy := nodes
+	if settings.Matrix.Enabled {
+		legacy = make([]model.Node, 0, len(nodes))
+		for _, node := range nodes {
+			if node.Residential {
+				legacy = append(legacy, node)
+			}
+		}
+	}
+	if err := r.store.UpsertNodes(ctx, legacy, refreshedAt, preserveIP); err != nil {
 		r.setState(false, err)
 		return err
 	}
