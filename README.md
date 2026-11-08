@@ -99,6 +99,26 @@ PROXYGATE_API=http://127.0.0.1:8080 PROXYGATE_API_KEY=secret \
 
 The matrix API listens outside the web cookie session and is disabled (HTTP 503) unless `matrix.enabled` is true. Keep `PROXYGATE_API_KEY` out of client machines; only the SOCKS5 credentials per slot are needed there.
 
+### Windows client nodes
+
+The free Instabox plan does not publish raw TCP ports, so slot ports are reachable from a local Windows machine through one SSH tunnel. `scripts/matrix-win.ps1` keeps that tunnel open, fetches the allocated slots, probes each exit, and writes importable node files:
+
+```powershell
+$env:PROXYGATE_SSH = "ibssh_xxx@ssh.instabox.sh"
+powershell -ExecutionPolicy Bypass -File scripts\matrix-win.ps1 -WithPanel
+```
+
+Optional parameters: `-Allocate 10 -Country JP -Protocol openvpn_tcp -Mode sticky` allocates slots before generating nodes, `-IncludeDead` keeps slots whose exit probe failed, and `-OutDir` selects the output directory.
+
+Generated files:
+
+- `proxygate-clash.yaml` - complete Clash/Mihomo profile (mixed port 7890, one node per slot)
+- `proxygate-provider.yaml` - proxy list only, for use as a Mihomo proxy provider
+- `proxygate-singbox.json` - sing-box configuration (mixed port 7890, selector outbound)
+- `proxygate-nodes.txt` / `proxygate-nodes.csv` - `socks5://` links and per-slot credentials
+
+The tunnel forwards every allocated slot port to `127.0.0.1`; SOCKS5 clients use `127.0.0.1:108xx` with the slot username and the matrix password. SSH forwards TCP only, so QUIC/UDP does not traverse the tunnel; disable QUIC in the browser or let it fall back to TCP. Slot allocations live in memory, so after a container restart re-run the script (with `-Allocate`) to rebuild the node list.
+
 Tags such as `v0.1.0` produce GitHub release archives and a multi-platform image in the repository's GHCR package. Pre-release tags such as `v0.1.0-rc.1` are marked accordingly and do not overwrite `latest`.
 
 ## Configuration
