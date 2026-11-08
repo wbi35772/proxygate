@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
+	"github.com/ExpTechTW/proxygate/internal/matrix"
 	"github.com/ExpTechTW/proxygate/internal/service"
 	"github.com/ExpTechTW/proxygate/internal/service/speedtest"
 	"github.com/ExpTechTW/proxygate/internal/store"
@@ -18,6 +19,7 @@ type Server struct {
 	config     *config.Store
 	database   *store.Store
 	manager    *vpn.Manager
+	matrix     *matrix.Manager
 	refresher  *vpngate.Refresher
 	speedTests *speedtest.Service
 	services   []service.Service

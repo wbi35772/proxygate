@@ -152,6 +152,8 @@ func (s *Server) getConfig(c fiber.Ctx) error {
 	settings := s.config.Get()
 	settings.Web.PasswordHash = ""
 	settings.Web.SessionSecret = ""
+	settings.Matrix.APIKey = ""
+	settings.Matrix.Password = ""
 	return writeJSON(c, fiber.StatusOK, settings)
 }
 
@@ -166,6 +168,15 @@ func (s *Server) putConfig(c fiber.Ctx) error {
 	current := s.config.Get()
 	input.Config.Web.PasswordHash = current.Web.PasswordHash
 	input.Config.Web.SessionSecret = current.Web.SessionSecret
+	if !strings.Contains(string(c.Body()), `"matrix"`) {
+		input.Config.Matrix = current.Matrix
+	}
+	if input.Config.Matrix.APIKey == "" {
+		input.Config.Matrix.APIKey = current.Matrix.APIKey
+	}
+	if input.Config.Matrix.Password == "" {
+		input.Config.Matrix.Password = current.Matrix.Password
+	}
 	if input.NewPassword != "" {
 		if len(input.NewPassword) < 8 {
 			return writeError(c, fiber.StatusBadRequest, "new web password must contain at least 8 characters")

@@ -28,11 +28,18 @@ type Node struct {
 	Message         string    `json:"message"`
 	OpenVPNConfig   string    `json:"-"`
 	Protocols       []string  `json:"protocols"`
+	ASN             string    `json:"asn,omitempty"`
+	ASNOrg          string    `json:"asnOrg,omitempty"`
+	Residential     bool      `json:"residential"`
+	FailCount       int       `json:"failCount"`
+	Source          string    `json:"source,omitempty"`
 	MeasuredBPS     int64     `json:"measuredBps"`
 	MeasuredAt      time.Time `json:"measuredAt,omitzero"`
 	SpeedTestFailed bool      `json:"speedTestFailed"`
 	LastFailure     time.Time `json:"lastFailure,omitzero"`
 	FailureReason   string    `json:"failureReason,omitempty"`
+	FirstSeen       time.Time `json:"firstSeen,omitzero"`
+	LastSeen        time.Time `json:"lastSeen,omitzero"`
 	RefreshedAt     time.Time `json:"refreshedAt"`
 }
 

@@ -3,11 +3,13 @@ package vpngate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
+	"github.com/ExpTechTW/proxygate/internal/model"
 	"github.com/ExpTechTW/proxygate/internal/store"
 )
 
@@ -54,6 +56,11 @@ func (r *Refresher) Run(ctx context.Context) {
 	for {
 		settings := r.config.Get()
 		interval, _ := settings.RefreshDuration()
+		if settings.Matrix.Enabled {
+			if matrixInterval, err := settings.Matrix.HarvestDuration(); err == nil {
+				interval = matrixInterval
+			}
+		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
@@ -69,6 +76,13 @@ func (r *Refresher) Run(ctx context.Context) {
 	}
 }
 
+func (r *Refresher) sources(settings config.Config) []string {
+	if settings.Matrix.Enabled && len(settings.Matrix.Sources) > 0 {
+		return settings.Matrix.Sources
+	}
+	return []string{settings.SourceURL}
+}
+
 func (r *Refresher) Refresh(ctx context.Context) error {
 	if !r.mu.TryLock() {
 		return errors.New("node refresh is already running")
@@ -76,26 +90,79 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 	defer r.mu.Unlock()
 	r.setState(true, nil)
 	settings := r.config.Get()
-	nodes, err := r.client.Fetch(ctx, settings.SourceURL, settings.FilterExpression)
-	if err == nil {
-		refreshedAt := time.Now()
+	refreshedAt := time.Now()
+	merged := make(map[string]model.Node)
+	var failures []error
+	successes := 0
+	for _, source := range r.sources(settings) {
+		if ctx.Err() != nil {
+			r.setState(false, ctx.Err())
+			return ctx.Err()
+		}
+		nodes, err := r.client.Fetch(ctx, source, settings.FilterExpression)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", source, err))
+			r.logger.Printf("[refresh] source=%s error=%v", source, err)
+			continue
+		}
+		successes++
 		for index := range nodes {
 			nodes[index].RefreshedAt = refreshedAt
+			nodes[index].LastSeen = refreshedAt
+			nodes[index].Source = source
+			Classify(&nodes[index])
+			current, exists := merged[nodes[index].IP]
+			if !exists || nodes[index].Score > current.Score {
+				merged[nodes[index].IP] = nodes[index]
+			}
 		}
-		preserveIP := ""
-		if r.activeIP != nil {
-			preserveIP = r.activeIP()
+		r.logger.Printf("[refresh] source=%s fetched=%d", source, len(nodes))
+	}
+	if successes == 0 {
+		err := fmt.Errorf("all VPN Gate sources failed: %w", errors.Join(failures...))
+		r.setState(false, err)
+		return err
+	}
+	nodes := make([]model.Node, 0, len(merged))
+	residential := 0
+	for _, node := range merged {
+		if node.Residential {
+			residential++
 		}
-		err = r.store.ReplaceNodes(ctx, nodes, refreshedAt, preserveIP)
-		if err == nil {
-			r.logger.Printf("[refresh] stored %d filtered nodes", len(nodes))
-			if r.after != nil {
-				r.after(ctx)
+		nodes = append(nodes, node)
+	}
+	preserveIP := ""
+	if r.activeIP != nil {
+		preserveIP = r.activeIP()
+	}
+	if err := r.store.UpsertNodes(ctx, nodes, refreshedAt, preserveIP); err != nil {
+		r.setState(false, err)
+		return err
+	}
+	if err := r.store.UpsertPoolNodes(ctx, nodes, "harvest", refreshedAt); err != nil {
+		r.setState(false, err)
+		return err
+	}
+	if settings.Matrix.Enabled {
+		if ttl, err := settings.Matrix.NodeTTLDuration(); err == nil {
+			if removed, pruneErr := r.store.PrunePoolNodes(ctx, refreshedAt.Add(-ttl)); pruneErr != nil {
+				r.logger.Printf("[refresh] prune pool: %v", pruneErr)
+			} else if removed > 0 {
+				r.logger.Printf("[refresh] pruned %d expired pool rows", removed)
 			}
 		}
 	}
-	r.setState(false, err)
-	return err
+	r.logger.Printf("[refresh] stored nodes=%d residential=%d sources=%d", len(nodes), residential, successes)
+	if r.after != nil {
+		r.after(ctx)
+	}
+	var finalErr error
+	if len(failures) > 0 {
+		finalErr = errors.Join(failures...)
+		r.logger.Printf("[refresh] partial source failure: %v", finalErr)
+	}
+	r.setState(false, finalErr)
+	return finalErr
 }
 
 func (r *Refresher) setState(running bool, err error) {

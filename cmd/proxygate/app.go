@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
+	"github.com/ExpTechTW/proxygate/internal/matrix"
 	"github.com/ExpTechTW/proxygate/internal/server"
 	"github.com/ExpTechTW/proxygate/internal/service"
 	service_healthcheck "github.com/ExpTechTW/proxygate/internal/service/healthcheck"
@@ -51,7 +52,12 @@ func appStart(args arguments, logger *log.Logger) error {
 
 	appCtx, cancelApp := context.WithCancel(context.Background())
 	manager := vpn.NewManager(appCtx, configStore, database, logger, vpn.DefaultDrivers())
-	refresher := vpngate.NewRefresher(configStore, database, logger, manager.PreservedIP, manager.AfterRefresh)
+	matrixManager := matrix.NewManager(appCtx, configStore, database, logger, vpn.DefaultDrivers())
+	afterRefresh := func(ctx context.Context) {
+		manager.AfterRefresh(ctx)
+		matrixManager.AfterHarvest(ctx)
+	}
+	refresher := vpngate.NewRefresher(configStore, database, logger, manager.PreservedIP, afterRefresh)
 	socksService := service_socks5.New(configStore, manager, logger)
 	speedTestService := service_speedtest.New(manager, logger)
 	healthCheckService := service_healthcheck.New(configStore, manager, logger)
@@ -70,6 +76,17 @@ func appStart(args arguments, logger *log.Logger) error {
 		logger.Printf("[service:%s] started", backgroundService.Name())
 	}
 
+	if configStore.Get().Matrix.Enabled {
+		if err := matrixManager.Start(); err != nil {
+			cancelApp()
+			_ = stopServices(context.Background(), started, logger)
+			_ = matrixManager.Close()
+			_ = manager.Close()
+			_ = database.Close()
+			return fmt.Errorf("start matrix gateway: %w", err)
+		}
+	}
+
 	var background sync.WaitGroup
 	background.Add(2)
 	go func() {
@@ -84,13 +101,19 @@ func appStart(args arguments, logger *log.Logger) error {
 	}()
 
 	lastRefresh := database.LastRefresh(appCtx)
-	refreshInterval, _ := configStore.Get().RefreshDuration()
+	settings := configStore.Get()
+	refreshInterval, _ := settings.RefreshDuration()
+	if settings.Matrix.Enabled {
+		if matrixInterval, err := settings.Matrix.HarvestDuration(); err == nil {
+			refreshInterval = matrixInterval
+		}
+	}
 	if lastRefresh.IsZero() || time.Since(lastRefresh) >= refreshInterval {
 		refresher.Trigger()
 	}
 
 	restartRequest := make(chan struct{}, 1)
-	httpServer := server.New(configStore, database, manager, refresher, speedTestService, services, restartRequest, logger)
+	httpServer := server.New(configStore, database, manager, matrixManager, refresher, speedTestService, services, restartRequest, logger)
 	httpServer.Setup()
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- httpServer.Start() }()
@@ -126,6 +149,9 @@ func appStart(args arguments, logger *log.Logger) error {
 	}
 	if err := stopServices(shutdownCtx, started, logger); err != nil {
 		shutdownErrors = append(shutdownErrors, err)
+	}
+	if err := matrixManager.Close(); err != nil {
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("close matrix gateway: %w", err))
 	}
 
 	backgroundDone := make(chan struct{})

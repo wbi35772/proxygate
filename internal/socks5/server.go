@@ -44,17 +44,44 @@ type IPv4Resolver interface {
 }
 
 type Server struct {
-	config *config.Store
-	dialer Dialer
-	logger *log.Logger
+	config     *config.Store
+	dialer     Dialer
+	logger     *log.Logger
+	settingsFn func() config.SOCKS5
 }
 
 func New(configStore *config.Store, dialer Dialer, logger *log.Logger) *Server {
-	return &Server{config: configStore, dialer: dialer, logger: logger}
+	return &Server{
+		config: configStore,
+		dialer: dialer,
+		logger: logger,
+		settingsFn: func() config.SOCKS5 {
+			return configStore.Get().SOCKS5
+		},
+	}
+}
+
+// NewWithSettings starts a listener with a fixed SOCKS5 credential pair. Matrix
+// slots use it so each port requires its own slot username and password.
+func NewWithSettings(dialer Dialer, logger *log.Logger, settings config.SOCKS5) *Server {
+	return &Server{
+		dialer: dialer,
+		logger: logger,
+		settingsFn: func() config.SOCKS5 {
+			return settings
+		},
+	}
+}
+
+func (s *Server) settings() config.SOCKS5 {
+	if s.settingsFn == nil {
+		return s.config.Get().SOCKS5
+	}
+	return s.settingsFn()
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	address := s.config.Get().SOCKS5.ListenAddress
+	address := s.settings().ListenAddress
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen for SOCKS5: %w", err)
@@ -113,7 +140,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 
 func (s *Server) handle(ctx context.Context, client net.Conn) error {
 	_ = client.SetDeadline(time.Now().Add(15 * time.Second))
-	settings := s.config.Get().SOCKS5
+	settings := s.settings()
 	if err := negotiate(client, settings.Username, settings.Password); err != nil {
 		return err
 	}
@@ -149,7 +176,7 @@ func (s *Server) handleConnect(ctx context.Context, client net.Conn, network, ad
 	if err := client.SetDeadline(time.Time{}); err != nil {
 		return err
 	}
-	settings := s.config.Get().SOCKS5
+	settings := s.settings()
 	idleTimeout, _ := settings.IdleTimeoutDuration()
 	halfCloseTimeout, _ := settings.HalfCloseTimeoutDuration()
 	return relayTCP(ctx, client, upstream, idleTimeout, halfCloseTimeout)
@@ -272,7 +299,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, client net.Conn) error 
 			}
 		}()
 	}
-	idleTimeout, _ := s.config.Get().SOCKS5.IdleTimeoutDuration()
+	idleTimeout, _ := s.settings().IdleTimeoutDuration()
 	idle := time.NewTimer(idleTimeout)
 	defer idle.Stop()
 

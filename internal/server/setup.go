@@ -42,6 +42,11 @@ func (s *Server) Setup() {
 
 	app.Get("/api/version", s.version)
 	app.Post("/api/login", s.login)
+	pool := app.Group("/api/v1/pool", s.poolAuth)
+	pool.Get("/slots", s.poolSlots)
+	pool.Post("/allocate", s.poolAllocate)
+	pool.Post("/rotate/:slot_id", s.poolRotate)
+	pool.Get("/nodes/stats", s.poolStats)
 	api := app.Group("/api", s.auth)
 	api.Post("/logout", s.logout)
 	api.Get("/status", s.status)

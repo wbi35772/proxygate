@@ -50,6 +50,82 @@ type Config struct {
 	VPNGateUsername        string   `json:"vpnGateUsername"`
 	VPNGatePassword        string   `json:"vpnGatePassword"`
 	VPNGatePreSharedKey    string   `json:"vpnGatePreSharedKey"`
+	Matrix                 Matrix   `json:"matrix"`
+}
+
+// Matrix configures the multi-slot residential gateway. The zero value keeps
+// the feature disabled so configurations written by older releases remain
+// valid; defaults are applied immediately after decoding.
+type Matrix struct {
+	Enabled            bool     `json:"enabled"`
+	Slots              int      `json:"slots"`
+	PortStart          int      `json:"portStart"`
+	ListenAddress      string   `json:"listenAddress"`
+	PublicHost         string   `json:"publicHost"`
+	UsernamePrefix     string   `json:"usernamePrefix"`
+	Password           string   `json:"password"`
+	APIKey             string   `json:"apiKey"`
+	HarvestInterval    string   `json:"harvestInterval"`
+	NodeTTL            string   `json:"nodeTtl"`
+	RotateInterval     string   `json:"rotateInterval"`
+	Autostart          bool     `json:"autostart"`
+	ResidentialOnly    bool     `json:"residentialOnly"`
+	PreferredCountries []string `json:"preferredCountries"`
+	PreferredASNs      []string `json:"preferredAsns"`
+	Sources            []string `json:"sources"`
+}
+
+func (m *Matrix) applyDefaults() {
+	if m.Slots == 0 {
+		m.Slots = 35
+	}
+	if m.PortStart == 0 {
+		m.PortStart = 10801
+	}
+	if m.ListenAddress == "" {
+		m.ListenAddress = "0.0.0.0"
+	}
+	if m.UsernamePrefix == "" {
+		m.UsernamePrefix = "slot_"
+	}
+	if m.HarvestInterval == "" {
+		m.HarvestInterval = "3m"
+	}
+	if m.NodeTTL == "" {
+		m.NodeTTL = "6h"
+	}
+	if m.RotateInterval == "" {
+		m.RotateInterval = "5m"
+	}
+	if len(m.PreferredCountries) == 0 {
+		m.PreferredCountries = []string{"JP", "KR"}
+	}
+	if len(m.PreferredASNs) == 0 {
+		m.PreferredASNs = []string{"NTT", "KDDI", "SOFTBANK", "KT", "SK BROADBAND", "LG U+"}
+	}
+	if len(m.Sources) == 0 {
+		m.Sources = []string{"https://www.vpngate.net/api/iphone/", "http://www.vpngate.net/api/iphone/"}
+	}
+}
+
+func (m Matrix) HarvestDuration() (time.Duration, error) {
+	return positiveDuration(m.HarvestInterval)
+}
+
+func (m Matrix) NodeTTLDuration() (time.Duration, error) {
+	return positiveDuration(m.NodeTTL)
+}
+
+func (m Matrix) RotateIntervalDuration() (time.Duration, error) {
+	return positiveDuration(m.RotateInterval)
+}
+
+func (m Matrix) Username(slotID int) string {
+	return fmt.Sprintf("%s%02d", m.UsernamePrefix, slotID)
+}
+
+func (m Matrix) SlotAddress(slotID int) string {
+	return net.JoinHostPort(m.ListenAddress, strconv.Itoa(m.PortStart+slotID-1))
 }
 
 type SOCKS5 struct {
@@ -108,6 +184,7 @@ func defaultConfig() (Config, string) {
 		DNSServers: append([]string(nil), defaultDNSServers...), SpeedTestURL: DefaultSpeedTestURL, SpeedTestTimeout: "45s",
 		ProtocolPriority: []string{model.ProtocolOpenVPNUDP, model.ProtocolOpenVPNTCP, model.ProtocolSoftEtherTLS, model.ProtocolSSTP, model.ProtocolL2TP},
 		VPNGateUsername:  "vpn", VPNGatePassword: "vpn", VPNGatePreSharedKey: "vpn",
+		Matrix: Matrix{},
 	}, password
 }
 
@@ -201,6 +278,52 @@ func (c Config) Validate() error {
 	if strings.ContainsAny(c.VPNGateUsername, "\r\n") || strings.ContainsAny(c.VPNGatePassword, "\r\n") {
 		return errors.New("VPN Gate username and password must not contain newlines")
 	}
+	return c.validateMatrix()
+}
+
+func (c Config) validateMatrix() error {
+	m := c.Matrix
+	if !m.Enabled {
+		return nil
+	}
+	if m.Slots < 1 || m.Slots > 256 {
+		return errors.New("matrix.slots must be between 1 and 256")
+	}
+	if m.PortStart < 1 || m.PortStart+m.Slots-1 > 65535 {
+		return errors.New("matrix.portStart and matrix.slots exceed the valid TCP port range")
+	}
+	if err := validateAddress("matrix.listenAddress", m.ListenAddress); err != nil {
+		return err
+	}
+	if m.UsernamePrefix == "" || strings.ContainsAny(m.UsernamePrefix, ":\r\n") || len(m.UsernamePrefix) > 200 {
+		return errors.New("matrix.usernamePrefix is invalid")
+	}
+	if m.Password == "" || len(m.Password) > 255 || strings.ContainsAny(m.Password, "\r\n") {
+		return errors.New("matrix.password must be between 1 and 255 bytes and must not contain newlines")
+	}
+	if m.APIKey == "" {
+		return errors.New("matrix.apiKey is required when the matrix is enabled")
+	}
+	if _, err := m.HarvestDuration(); err != nil {
+		return fmt.Errorf("matrix.harvestInterval: %w", err)
+	}
+	if _, err := m.NodeTTLDuration(); err != nil {
+		return fmt.Errorf("matrix.nodeTtl: %w", err)
+	}
+	if _, err := m.RotateIntervalDuration(); err != nil {
+		return fmt.Errorf("matrix.rotateInterval: %w", err)
+	}
+	for _, source := range m.Sources {
+		parsed, err := url.ParseRequestURI(source)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("matrix.sources contains an invalid URL %q", source)
+		}
+	}
+	for _, country := range m.PreferredCountries {
+		if len(country) != 2 {
+			return fmt.Errorf("matrix.preferredCountries contains invalid country code %q", country)
+		}
+	}
 	return nil
 }
 
@@ -273,6 +396,7 @@ func load(path string, logger *log.Logger) (*Store, error) {
 	} else {
 		return nil, fmt.Errorf("read config: %w", readErr)
 	}
+	value.Matrix.applyDefaults()
 	applyEnvironmentOverrides(&value)
 	if !filepath.IsAbs(value.DatabasePath) {
 		value.DatabasePath = filepath.Join(filepath.Dir(absolute), value.DatabasePath)
@@ -301,6 +425,52 @@ func applyEnvironmentOverrides(value *Config) {
 	}
 	if path := strings.TrimSpace(os.Getenv("PROXYGATE_DATABASE_PATH")); path != "" {
 		value.DatabasePath = path
+	}
+	if raw := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_ENABLED")); raw != "" {
+		if parsed, err := strconv.ParseBool(raw); err == nil {
+			value.Matrix.Enabled = parsed
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_AUTOSTART")); raw != "" {
+		if parsed, err := strconv.ParseBool(raw); err == nil {
+			value.Matrix.Autostart = parsed
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_RESIDENTIAL_ONLY")); raw != "" {
+		if parsed, err := strconv.ParseBool(raw); err == nil {
+			value.Matrix.ResidentialOnly = parsed
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_SLOTS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			value.Matrix.Slots = parsed
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_PORT_START")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			value.Matrix.PortStart = parsed
+		}
+	}
+	if address := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_LISTEN_ADDRESS")); address != "" {
+		value.ListenAddress = address
+	}
+	if host := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_PUBLIC_HOST")); host != "" {
+		value.Matrix.PublicHost = host
+	}
+	if password := os.Getenv("PROXYGATE_MATRIX_PASSWORD"); password != "" {
+		value.Matrix.Password = password
+	}
+	if key := os.Getenv("PROXYGATE_MATRIX_API_KEY"); key != "" {
+		value.Matrix.APIKey = key
+	}
+	if interval := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_HARVEST_INTERVAL")); interval != "" {
+		value.Matrix.HarvestInterval = interval
+	}
+	if ttl := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_NODE_TTL")); ttl != "" {
+		value.Matrix.NodeTTL = ttl
+	}
+	if interval := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_ROTATE_INTERVAL")); interval != "" {
+		value.Matrix.RotateInterval = interval
 	}
 }
 
@@ -346,6 +516,9 @@ func (s *Store) Get() Config {
 	value := s.config
 	value.ProtocolPriority = append([]string(nil), value.ProtocolPriority...)
 	value.DNSServers = append([]string(nil), value.DNSServers...)
+	value.Matrix.PreferredCountries = append([]string(nil), value.Matrix.PreferredCountries...)
+	value.Matrix.PreferredASNs = append([]string(nil), value.Matrix.PreferredASNs...)
+	value.Matrix.Sources = append([]string(nil), value.Matrix.Sources...)
 	return value
 }
 
@@ -353,6 +526,7 @@ func (s *Store) Save(value Config) error {
 	if !filepath.IsAbs(value.DatabasePath) {
 		value.DatabasePath = filepath.Join(filepath.Dir(s.path), value.DatabasePath)
 	}
+	value.Matrix.applyDefaults()
 	if err := value.Validate(); err != nil {
 		return err
 	}
