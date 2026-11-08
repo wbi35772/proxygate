@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +46,7 @@ type Slot struct {
 	protocol   string
 	country    string
 	node       model.Node
+	exitIP     string
 	tunnel     *vpn.Tunnel
 	state      string
 	lastErr    string
@@ -127,12 +130,14 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 		return
 	}
 	previous := s.node
+	previousExit := s.exitIP
 	oldTunnel := s.tunnel
 	targetCountry := s.country
 	protocol := s.protocol
 	mode := s.mode
 	s.tunnel = nil
 	s.node = model.Node{}
+	s.exitIP = ""
 	s.state = StateSwitching
 	s.lastErr = ""
 	s.ready = make(chan struct{})
@@ -142,7 +147,10 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 		_ = oldTunnel.Close()
 	}
 	if previous.IP != "" {
-		s.manager.releaseIP(previous.IP, s.id)
+		s.manager.releaseNodeIP(previous.IP, s.id)
+	}
+	if previousExit != "" {
+		s.manager.releaseExitIP(previousExit, s.id)
 	}
 
 	settings := s.manager.config.Get()
@@ -156,7 +164,7 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 		if s.ctx.Err() != nil {
 			return
 		}
-		if !s.manager.reserveIP(candidate.IP, s.id) {
+		if !s.manager.reserveNodeIP(candidate.IP, s.id) {
 			continue
 		}
 		var tunnel *vpn.Tunnel
@@ -167,27 +175,42 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 		err := tunnel.Connect(connectCtx, candidate, protocol)
 		cancel()
 		if err != nil {
-			s.manager.releaseIP(candidate.IP, s.id)
+			s.manager.releaseNodeIP(candidate.IP, s.id)
 			_ = tunnel.Close()
 			_ = s.manager.database.MarkPoolFailure(s.ctx, candidate.IP, protocolForFailure(candidate, protocol), err.Error())
 			lastErr = fmt.Errorf("node %s (%s/%s): %w", candidate.IP, candidate.CountryShort, candidate.ASNOrg, err)
 			s.logger.Printf("[matrix] slot=%d candidate failed %v", s.id, lastErr)
 			continue
 		}
+		probeCtx, probeCancel := context.WithTimeout(s.ctx, 12*time.Second)
+		exitIP := probeExitIP(probeCtx, tunnel)
+		probeCancel()
+		if exitIP == "" {
+			exitIP = candidate.IP
+		}
+		if !s.manager.reserveExitIP(exitIP, s.id) {
+			s.manager.releaseNodeIP(candidate.IP, s.id)
+			_ = tunnel.Close()
+			lastErr = fmt.Errorf("node %s exits through IP %s already used by another slot", candidate.IP, exitIP)
+			s.logger.Printf("[matrix] slot=%d candidate skipped: %v", s.id, lastErr)
+			continue
+		}
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
-			s.manager.releaseIP(candidate.IP, s.id)
+			s.manager.releaseNodeIP(candidate.IP, s.id)
+			s.manager.releaseExitIP(exitIP, s.id)
 			_ = tunnel.Close()
 			return
 		}
 		s.tunnel = tunnel
 		s.node = candidate
+		s.exitIP = exitIP
 		s.state = StateReady
 		s.lastSwitch = time.Now()
 		close(s.ready)
 		s.mu.Unlock()
-		s.logger.Printf("[matrix] slot=%d ready ip=%s country=%s asn=%s residential=%t reason=%s", s.id, candidate.IP, candidate.CountryShort, candidate.ASN, candidate.Residential, reason)
+		s.logger.Printf("[matrix] slot=%d ready node=%s exit=%s country=%s asn=%s residential=%t reason=%s", s.id, candidate.IP, exitIP, candidate.CountryShort, candidate.ASN, candidate.Residential, reason)
 		return
 	}
 	s.fail(lastErr)
@@ -395,6 +418,47 @@ func (s *Slot) ResolveIPv4(ctx context.Context, host string) ([]net.IP, error) {
 	return tunnel.ResolveIPv4(ctx, host)
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func probeExitIP(ctx context.Context, tunnel *vpn.Tunnel) string {
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext:           tunnel.DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Second,
+			DisableKeepAlives:     true,
+		},
+		Timeout: 6 * time.Second,
+	}
+	for _, endpoint := range []string{"https://api.ipify.org", "https://checkip.amazonaws.com"} {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			continue
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 64))
+		_ = response.Body.Close()
+		if readErr != nil {
+			continue
+		}
+		candidate := strings.TrimSpace(string(body))
+		if net.ParseIP(candidate) != nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func (s *Slot) Status() SlotStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -406,7 +470,9 @@ func (s *Slot) Status() SlotStatus {
 		Protocol:    s.protocol,
 		Country:     s.country,
 		State:       s.state,
-		ActiveIP:    s.node.IP,
+		ActiveIP:    firstNonEmpty(s.exitIP, s.node.IP),
+		NodeIP:      s.node.IP,
+		ExitIP:      s.exitIP,
 		CountryShort: s.node.CountryShort,
 		ASN:         s.node.ASN,
 		ASNOrg:      s.node.ASNOrg,
