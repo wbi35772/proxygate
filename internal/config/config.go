@@ -292,8 +292,8 @@ func (c Config) validateMatrix() error {
 	if m.PortStart < 1 || m.PortStart+m.Slots-1 > 65535 {
 		return errors.New("matrix.portStart and matrix.slots exceed the valid TCP port range")
 	}
-	if err := validateAddress("matrix.listenAddress", m.ListenAddress); err != nil {
-		return err
+	if m.ListenAddress == "" || strings.ContainsAny(m.ListenAddress, " \t\r\n/") {
+		return errors.New("matrix.listenAddress is invalid")
 	}
 	if m.UsernamePrefix == "" || strings.ContainsAny(m.UsernamePrefix, ":\r\n") || len(m.UsernamePrefix) > 200 {
 		return errors.New("matrix.usernamePrefix is invalid")
