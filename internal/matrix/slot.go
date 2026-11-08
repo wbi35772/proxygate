@@ -242,12 +242,16 @@ func (s *Slot) candidates(previous model.Node, country, protocol, mode string, a
 			result = append(result, node)
 		}
 	}
+	exclude := s.manager.excludeIPs(s.id)
+	if !allowSameIP && previous.IP != "" {
+		exclude = append(exclude, previous.IP)
+	}
 	base := store.PoolFilter{
 		Protocol:           protocol,
 		ResidentialOnly:    settings.Matrix.ResidentialOnly,
 		PreferredCountries: settings.Matrix.PreferredCountries,
 		PreferredASNs:      settings.Matrix.PreferredASNs,
-		Exclude:            s.manager.excludeIPs(s.id),
+		Exclude:            exclude,
 		Limit:              10,
 	}
 	fetch := func(filter store.PoolFilter) {
