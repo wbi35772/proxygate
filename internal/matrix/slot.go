@@ -505,9 +505,13 @@ func (s *Slot) Close() error {
 	tunnel := s.tunnel
 	s.tunnel = nil
 	node := s.node
+	exitIP := s.exitIP
 	s.mu.Unlock()
 	if node.IP != "" {
-		s.manager.releaseIP(node.IP, s.id)
+		s.manager.releaseNodeIP(node.IP, s.id)
+	}
+	if exitIP != "" {
+		s.manager.releaseExitIP(exitIP, s.id)
 	}
 	if s.listener != nil {
 		_ = s.listener.Close()
