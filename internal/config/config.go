@@ -80,6 +80,12 @@ type Matrix struct {
 	SubscriptionPath       string `json:"subscriptionPath"`
 	SubscriptionTrojanPath string `json:"subscriptionTrojanPath"`
 	PublicSocksHost        string `json:"publicSocksHost"`
+	FrontProxyEnabled      bool   `json:"frontProxyEnabled"`
+	FrontProxyType         string `json:"frontProxyType"`
+	FrontProxyURL          string `json:"frontProxyUrl"`
+	FrontProxySlot         int    `json:"frontProxySlot"`
+	FrontProxyAPI          string `json:"frontProxyApi"`
+	FrontProxyTimeout      string `json:"frontProxyTimeout"`
 }
 
 func (m *Matrix) applyDefaults() {
@@ -121,6 +127,12 @@ func (m *Matrix) applyDefaults() {
 	}
 	if m.SubscriptionTrojanPath == "" {
 		m.SubscriptionTrojanPath = "/pgtrojan"
+	}
+	if m.FrontProxyType == "" {
+		m.FrontProxyType = "socks5"
+	}
+	if m.FrontProxyTimeout == "" {
+		m.FrontProxyTimeout = "15s"
 	}
 }
 
@@ -521,6 +533,31 @@ func applyEnvironmentOverrides(value *Config) {
 	}
 	if host := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_PUBLIC_SOCKS_HOST")); host != "" {
 		value.Matrix.PublicSocksHost = host
+	}
+	if setting := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_FRONT_PROXY")); setting != "" {
+		switch strings.ToLower(setting) {
+		case "off", "false", "0", "disabled", "-":
+			value.Matrix.FrontProxyEnabled = false
+		default:
+			value.Matrix.FrontProxyEnabled = true
+		}
+	}
+	if kind := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_FRONT_PROXY_TYPE")); kind != "" {
+		value.Matrix.FrontProxyType = kind
+	}
+	if endpoint := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_FRONT_PROXY_URL")); endpoint != "" {
+		value.Matrix.FrontProxyURL = endpoint
+	}
+	if slot := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_FRONT_PROXY_SLOT")); slot != "" {
+		if id, err := strconv.Atoi(slot); err == nil {
+			value.Matrix.FrontProxySlot = id
+		}
+	}
+	if endpoint := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_FRONT_PROXY_API")); endpoint != "" {
+		value.Matrix.FrontProxyAPI = endpoint
+	}
+	if timeout := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_FRONT_PROXY_TIMEOUT")); timeout != "" {
+		value.Matrix.FrontProxyTimeout = timeout
 	}
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"strings"
@@ -8,32 +9,62 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
+	"github.com/ExpTechTW/proxygate/internal/matrix"
 )
 
+type subscriptionNode struct {
+	SlotID      int    `json:"slotId"`
+	Name        string `json:"name"`
+	Country     string `json:"country,omitempty"`
+	ASNOrg      string `json:"asnOrg,omitempty"`
+	Residential bool   `json:"residential"`
+	Chained     bool   `json:"chained"`
+}
+
 type subscriptionInfo struct {
-	Enabled       bool           `json:"enabled"`
-	V2RayURL      string         `json:"v2rayUrl"`
-	ClashURL      string         `json:"clashUrl"`
-	AutoURL       string         `json:"autoUrl"`
-	PublicHost    string         `json:"publicHost"`
-	Token         string         `json:"token"`
-	WebSocketPath string         `json:"websocketPath"`
-	TrojanPath    string         `json:"trojanPath"`
-	Protocol      string         `json:"protocol"`
-	UDP           bool           `json:"udp"`
-	Slots         map[string]int `json:"slots"`
+	Enabled       bool               `json:"enabled"`
+	V2RayURL      string             `json:"v2rayUrl"`
+	ClashURL      string             `json:"clashUrl"`
+	AutoURL       string             `json:"autoUrl"`
+	PublicHost    string             `json:"publicHost"`
+	Token         string             `json:"token"`
+	WebSocketPath string             `json:"websocketPath"`
+	TrojanPath    string             `json:"trojanPath"`
+	Protocol      string             `json:"protocol"`
+	UDP           bool               `json:"udp"`
+	Slots         map[string]int     `json:"slots"`
+	Countries     map[string]int     `json:"countries"`
+	Nodes         []subscriptionNode `json:"nodes"`
+	FrontProxy    frontProxySettings `json:"frontProxy"`
 }
 
 func (s *Server) subscription(c fiber.Ctx) error {
 	current := s.config.Get()
 	settings := current.Matrix
 	slots := map[string]int{"total": 0, "ready": 0, "switching": 0, "error": 0}
+	countries := map[string]int{}
 	statuses, _ := s.matrix.Status()
+	nodes := make([]subscriptionNode, 0, len(statuses))
 	for _, status := range statuses {
 		slots["total"]++
 		switch status.State {
 		case "ready":
 			slots["ready"]++
+			code := strings.ToUpper(status.CountryShort)
+			if len(code) != 2 {
+				code = strings.ToUpper(status.Country)
+			}
+			if len(code) == 2 {
+				countries[code]++
+			}
+			nodes = append(nodes, subscriptionNode{
+				SlotID:      status.SlotID,
+				Name:        slotLabel(status),
+				Country:     code,
+				ASNOrg:      status.ASNOrg,
+				Residential: status.Residential,
+				Chained:     status.Chained,
+			})
 		case "switching":
 			slots["switching"]++
 		default:
@@ -61,6 +92,9 @@ func (s *Server) subscription(c fiber.Ctx) error {
 		Protocol:      "trojan-ws",
 		UDP:           true,
 		Slots:         slots,
+		Countries:     countries,
+		Nodes:         nodes,
+		FrontProxy:    frontProxySettingsFrom(settings),
 	}
 	if host != "" && token != "" {
 		base := "https://" + host + "/sub/" + url.PathEscape(token)
@@ -108,4 +142,34 @@ func listenPort(address string) string {
 		return strings.TrimPrefix(address, ":")
 	}
 	return ""
+}
+
+func slotLabel(status matrix.SlotStatus) string {
+	country := strings.ToUpper(status.CountryShort)
+	if len(country) != 2 {
+		country = strings.ToUpper(status.Country)
+	}
+	if len(country) != 2 {
+		country = "XX"
+	}
+	label := "pg-" + fmt.Sprintf("%02d", status.SlotID) + "-" + country
+	if status.ASNOrg != "" {
+		suffix := strings.ToLower(strings.Map(func(symbol rune) rune {
+			if symbol >= 'a' && symbol <= 'z' || symbol >= '0' && symbol <= '9' {
+				return symbol
+			}
+			if symbol >= 'A' && symbol <= 'Z' {
+				return symbol + ('a' - 'A')
+			}
+			return '-'
+		}, status.ASNOrg))
+		suffix = strings.Trim(strings.Join(strings.FieldsFunc(suffix, func(symbol rune) bool { return symbol == '-' }), "-"), "-")
+		if len(suffix) > 18 {
+			suffix = suffix[:18]
+		}
+		if suffix != "" {
+			label += "-" + suffix
+		}
+	}
+	return label
 }

@@ -37,13 +37,15 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 	if trojanPath == "" {
 		trojanPath = "/pgtrojan"
 	}
-	links := make([]trojanNode, 0, len(statuses))
+	options := nodeOptionsFromQuery(r.URL.Query())
+	all := make([]trojanNode, 0, len(statuses))
 	for _, status := range statuses {
 		if status.State != "ready" || status.ExitIP == "" {
 			continue
 		}
-		links = append(links, trojanNode{
+		all = append(all, trojanNode{
 			name:     nodeName(status),
+			country:  strings.ToUpper(firstNonEmpty(status.CountryShort, status.Country)),
 			password: slotUUID(settings.SubscriptionTokenValue(), status.SlotID),
 			host:     host,
 			port:     port,
@@ -51,11 +53,12 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 			path:     trojanPath,
 		})
 	}
-	if len(links) > 0 {
-		s.rememberNodes(links)
+	if len(all) > 0 {
+		s.rememberNodes(all)
 	} else if cached, ok := s.lastGoodNodes(); ok {
-		links = cached
+		all = cached
 	}
+	links := selectNodes(all, options)
 
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Profile-Update-Interval", "6")
@@ -68,7 +71,7 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 	switch format {
 	case "clash", "mihomo", "yaml", "clash.yaml":
 		writer.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-		_, _ = writer.Write([]byte(clashProfile(links)))
+		_, _ = writer.Write([]byte(clashProfile(links, options)))
 	case "v2ray", "v2rayn", "base64", "txt":
 		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = writer.Write([]byte(v2raySubscription(links)))
@@ -128,6 +131,7 @@ func nodeName(status matrix.SlotStatus) string {
 
 type trojanNode struct {
 	name     string
+	country  string
 	password string
 	host     string
 	port     int
@@ -185,13 +189,15 @@ func (s *Server) lastGoodNodes() ([]trojanNode, bool) {
 	return append([]trojanNode(nil), s.cachedNodes...), true
 }
 
-func clashProfile(nodes []trojanNode) string {
+func clashProfile(nodes []trojanNode, options nodeOptions) string {
 	var builder strings.Builder
 	builder.WriteString("mixed-port: 7890\n")
 	builder.WriteString("allow-lan: false\n")
 	builder.WriteString("mode: rule\n")
 	builder.WriteString("log-level: info\n")
 	builder.WriteString("ipv6: false\n")
+	builder.WriteString("unified-delay: true\n")
+	builder.WriteString("tcp-concurrent: true\n")
 	builder.WriteString("proxies:\n")
 	if len(nodes) == 0 {
 		builder.WriteString("  - name: \"direct\"\n    type: direct\n")
@@ -214,9 +220,33 @@ func clashProfile(nodes []trojanNode) string {
 		builder.WriteString("      headers:\n")
 		builder.WriteString("        Host: " + strconv.Quote(node.host) + "\n")
 	}
+
+	countryGroups := countryGroupsFor(nodes)
 	builder.WriteString("proxy-groups:\n")
 	builder.WriteString("  - name: ProxyGate\n")
 	builder.WriteString("    type: select\n")
+	builder.WriteString("    proxies:\n")
+	writeGroupEntry := func(name string) {
+		builder.WriteString("      - " + strconv.Quote(name) + "\n")
+	}
+	if len(nodes) == 0 {
+		writeGroupEntry("direct")
+	} else {
+		writeGroupEntry("Auto")
+		if options.group == "country" {
+			for _, group := range countryGroups {
+				writeGroupEntry(group.name)
+			}
+		}
+		for _, node := range nodes {
+			writeGroupEntry(node.name)
+		}
+	}
+	builder.WriteString("  - name: Auto\n")
+	builder.WriteString("    type: url-test\n")
+	builder.WriteString("    url: \"https://www.gstatic.com/generate_204\"\n")
+	builder.WriteString("    interval: 300\n")
+	builder.WriteString("    tolerance: 50\n")
 	builder.WriteString("    proxies:\n")
 	if len(nodes) == 0 {
 		builder.WriteString("      - \"direct\"\n")
@@ -224,7 +254,55 @@ func clashProfile(nodes []trojanNode) string {
 	for _, node := range nodes {
 		builder.WriteString("      - " + strconv.Quote(node.name) + "\n")
 	}
+	if options.group == "country" {
+		for _, group := range countryGroups {
+			builder.WriteString("  - name: " + strconv.Quote(group.name) + "\n")
+			builder.WriteString("    type: url-test\n")
+			builder.WriteString("    url: \"https://www.gstatic.com/generate_204\"\n")
+			builder.WriteString("    interval: 300\n")
+			builder.WriteString("    tolerance: 50\n")
+			builder.WriteString("    proxies:\n")
+			for _, name := range group.nodes {
+				builder.WriteString("      - " + strconv.Quote(name) + "\n")
+			}
+		}
+	}
+	builder.WriteString("dns:\n")
+	builder.WriteString("  enable: true\n")
+	builder.WriteString("  ipv6: false\n")
+	builder.WriteString("  enhanced-mode: fake-ip\n")
+	builder.WriteString("  fake-ip-range: 198.18.0.1/16\n")
+	builder.WriteString("  default-nameserver:\n")
+	builder.WriteString("    - 223.5.5.5\n")
+	builder.WriteString("    - 1.1.1.1\n")
+	builder.WriteString("  nameserver:\n")
+	builder.WriteString("    - https://1.1.1.1/dns-query\n")
+	builder.WriteString("    - https://8.8.8.8/dns-query\n")
 	builder.WriteString("rules:\n")
 	builder.WriteString("  - MATCH,ProxyGate\n")
 	return builder.String()
+}
+
+type countryGroup struct {
+	name  string
+	nodes []string
+}
+
+func countryGroupsFor(nodes []trojanNode) []countryGroup {
+	index := make(map[string]int)
+	groups := make([]countryGroup, 0, 8)
+	for _, node := range nodes {
+		code := strings.ToUpper(node.country)
+		if len(code) != 2 {
+			code = "XX"
+		}
+		position, exists := index[code]
+		if !exists {
+			position = len(groups)
+			index[code] = position
+			groups = append(groups, countryGroup{name: "PG-" + code})
+		}
+		groups[position].nodes = append(groups[position].nodes, node.name)
+	}
+	return groups
 }

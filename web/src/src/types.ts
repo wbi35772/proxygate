@@ -34,6 +34,24 @@ export interface Status {
   refreshRunning: boolean
 }
 
+export interface SubscriptionNode {
+  slotId: number
+  name: string
+  country?: string
+  asnOrg?: string
+  residential: boolean
+  chained: boolean
+}
+
+export interface FrontProxySettings {
+  enabled: boolean
+  type: string
+  url: string
+  slot: number
+  api: string
+  timeout: string
+}
+
 export interface SubscriptionInfo {
   enabled: boolean
   v2rayUrl: string
@@ -46,6 +64,9 @@ export interface SubscriptionInfo {
   protocol: string
   udp: boolean
   slots: { total: number; ready: number; switching: number; error: number }
+  countries: Record<string, number>
+  nodes: SubscriptionNode[]
+  frontProxy: FrontProxySettings
 }
 
 export interface VersionInfo {

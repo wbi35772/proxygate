@@ -8,11 +8,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
+	"github.com/ExpTechTW/proxygate/internal/frontproxy"
 	"github.com/ExpTechTW/proxygate/internal/model"
 	"github.com/ExpTechTW/proxygate/internal/socks5"
 	"github.com/ExpTechTW/proxygate/internal/store"
@@ -48,6 +50,8 @@ type Slot struct {
 	node       model.Node
 	exitIP     string
 	tunnel     *vpn.Tunnel
+	forwarder  *frontproxy.Forwarder
+	chained    bool
 	state      string
 	lastErr    string
 	lastSwitch time.Time
@@ -132,10 +136,13 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 	previous := s.node
 	previousExit := s.exitIP
 	oldTunnel := s.tunnel
+	oldForwarder := s.forwarder
 	targetCountry := s.country
 	protocol := s.protocol
 	mode := s.mode
 	s.tunnel = nil
+	s.forwarder = nil
+	s.chained = false
 	s.node = model.Node{}
 	s.exitIP = ""
 	s.state = StateSwitching
@@ -145,6 +152,9 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 
 	if oldTunnel != nil {
 		_ = oldTunnel.Close()
+	}
+	if oldForwarder != nil {
+		_ = oldForwarder.Close()
 	}
 	if previous.IP != "" {
 		s.manager.releaseNodeIP(previous.IP, s.id)
@@ -167,14 +177,35 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 		if !s.manager.reserveNodeIP(candidate.IP, s.id) {
 			continue
 		}
+		connectNode := candidate
+		chainProtocol := protocol
+		var forwarder *frontproxy.Forwarder
+		if chainedProtocol, ok := chainableProtocol(candidate, protocol); ok {
+			if dialer, ok := s.manager.frontProxyDialer(s.id); ok {
+				target := net.JoinHostPort(candidate.IP, strconv.Itoa(candidatePort(candidate)))
+				created, proxyErr := frontproxy.StartForwarder(dialer, target, s.logger)
+				if proxyErr != nil {
+					s.logger.Printf("[matrix] slot=%d front proxy: %v", s.id, proxyErr)
+				} else {
+					forwarder = created
+					connectNode.IP = "127.0.0.1"
+					connectNode.Port = created.Port()
+					chainProtocol = chainedProtocol
+					s.logger.Printf("[matrix] slot=%d chaining %s to %s via front proxy", s.id, chainedProtocol, target)
+				}
+			}
+		}
 		var tunnel *vpn.Tunnel
 		tunnel = vpn.NewTunnel(s.ctx, s.manager.config, s.logger, s.manager.drivers, func(ip string) {
 			s.handleDown(tunnel, ip)
 		})
 		connectCtx, cancel := context.WithTimeout(s.ctx, switchDeadline)
-		err := tunnel.Connect(connectCtx, candidate, protocol)
+		err := tunnel.Connect(connectCtx, connectNode, chainProtocol)
 		cancel()
 		if err != nil {
+			if forwarder != nil {
+				_ = forwarder.Close()
+			}
 			s.manager.releaseNodeIP(candidate.IP, s.id)
 			_ = tunnel.Close()
 			_ = s.manager.database.MarkPoolFailure(s.ctx, candidate.IP, protocolForFailure(candidate, protocol), err.Error())
@@ -189,6 +220,9 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 			exitIP = candidate.IP
 		}
 		if !s.manager.reserveExitIP(exitIP, s.id) {
+			if forwarder != nil {
+				_ = forwarder.Close()
+			}
 			s.manager.releaseNodeIP(candidate.IP, s.id)
 			_ = tunnel.Close()
 			lastErr = fmt.Errorf("node %s exits through IP %s already used by another slot", candidate.IP, exitIP)
@@ -198,19 +232,24 @@ func (s *Slot) switchSession(reason string, allowSameIP bool) {
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
+			if forwarder != nil {
+				_ = forwarder.Close()
+			}
 			s.manager.releaseNodeIP(candidate.IP, s.id)
 			s.manager.releaseExitIP(exitIP, s.id)
 			_ = tunnel.Close()
 			return
 		}
 		s.tunnel = tunnel
+		s.forwarder = forwarder
+		s.chained = forwarder != nil
 		s.node = candidate
 		s.exitIP = exitIP
 		s.state = StateReady
 		s.lastSwitch = time.Now()
 		close(s.ready)
 		s.mu.Unlock()
-		s.logger.Printf("[matrix] slot=%d ready node=%s exit=%s country=%s asn=%s residential=%t reason=%s", s.id, candidate.IP, exitIP, candidate.CountryShort, candidate.ASN, candidate.Residential, reason)
+		s.logger.Printf("[matrix] slot=%d ready node=%s exit=%s country=%s asn=%s residential=%t chained=%t reason=%s", s.id, candidate.IP, exitIP, candidate.CountryShort, candidate.ASN, candidate.Residential, forwarder != nil, reason)
 		return
 	}
 	s.fail(lastErr)
@@ -477,6 +516,7 @@ func (s *Slot) Status() SlotStatus {
 		ASN:         s.node.ASN,
 		ASNOrg:      s.node.ASNOrg,
 		Residential: s.node.Residential,
+		Chained:     s.chained,
 		FailCount:   s.node.FailCount,
 		LastError:   s.lastErr,
 		LastSwitch:  s.lastSwitch,
@@ -504,6 +544,8 @@ func (s *Slot) Close() error {
 	s.closed = true
 	tunnel := s.tunnel
 	s.tunnel = nil
+	forwarder := s.forwarder
+	s.forwarder = nil
 	node := s.node
 	exitIP := s.exitIP
 	s.mu.Unlock()
@@ -513,6 +555,9 @@ func (s *Slot) Close() error {
 	if exitIP != "" {
 		s.manager.releaseExitIP(exitIP, s.id)
 	}
+	if forwarder != nil {
+		_ = forwarder.Close()
+	}
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
@@ -520,4 +565,33 @@ func (s *Slot) Close() error {
 		return tunnel.Close()
 	}
 	return nil
+}
+
+// chainableProtocol reports whether the slot can reach this node through a
+// front proxy. Only protocols that dial node.IP and node.Port participate:
+// SoftEther and SSTP both speak TLS over a single TCP connection. OpenVPN owns
+// its port inside the profile and L2TP is UDP, so both stay direct.
+func chainableProtocol(node model.Node, protocol string) (string, bool) {
+	usable := func(candidate string) bool {
+		return candidate == model.ProtocolSoftEtherTLS || candidate == model.ProtocolSSTP
+	}
+	if protocol != "" {
+		if usable(protocol) {
+			return protocol, true
+		}
+		return "", false
+	}
+	for _, candidate := range node.Protocols {
+		if usable(candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func candidatePort(node model.Node) int {
+	if node.Port > 0 {
+		return node.Port
+	}
+	return 443
 }

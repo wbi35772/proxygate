@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 
 import { api } from './api'
 import { localeConfig, resolvedLocale } from './i18n'
-import type { Config, Node, Protocol, Status, SubscriptionInfo, VersionInfo } from './types'
+import type { Config, FrontProxySettings, Node, Protocol, Status, SubscriptionInfo, VersionInfo } from './types'
 
 const protocolLabels: Record<Protocol, string> = {
   openvpn_udp: 'OpenVPN UDP',
@@ -18,6 +18,7 @@ const protocolLabels: Record<Protocol, string> = {
 type View = 'nodes' | 'subscription' | 'settings'
 type Theme = 'light' | 'dark'
 type SortKey = 'speedBps' | 'pingMs' | 'score' | 'measuredBps' | 'countryShort'
+type NodeViewMode = 'cards' | 'list' | 'table'
 
 const protocolDisplayOrder: Protocol[] = ['openvpn_udp', 'openvpn_tcp', 'softether_https', 'sstp', 'l2tp']
 const selectionSort: Record<Config['selectionMode'], { key: SortKey; direction: 'asc' | 'desc' }> = {
@@ -61,10 +62,10 @@ function App() {
         <div className="brand-mark" aria-hidden="true"><span /></div>
         <div><BrandTitle version={version} /><small>{t('app.subtitle')}</small></div>
       </div>
-      <nav className="primary-nav" aria-label={t('app.navigation')}>
-        <button className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}><span>{t('app.nodes')}</span><small>{t('app.nodes')}</small></button>
-        <button className={view === 'subscription' ? 'active' : ''} onClick={() => setView('subscription')}><span>{t('app.subscription')}</span><small>{t('app.subscription')}</small></button>
-        <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}><span>{t('app.settings')}</span><small>{t('app.settings')}</small></button>
+      <nav className="primary-nav" role="tablist" aria-label={t('app.navigation')}>
+        <button role="tab" aria-selected={view === 'nodes'} className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}><span>{t('app.nodes')}</span><small>{t('app.nodes')}</small></button>
+        <button role="tab" aria-selected={view === 'subscription'} className={view === 'subscription' ? 'active' : ''} onClick={() => setView('subscription')}><span>{t('app.subscription')}</span><small>{t('app.subscription')}</small></button>
+        <button role="tab" aria-selected={view === 'settings'} className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}><span>{t('app.settings')}</span><small>{t('app.settings')}</small></button>
       </nav>
       <div className="topbar-actions">
         <LanguageSelect />
@@ -137,6 +138,7 @@ function Nodes() {
   const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('speedBps')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [viewMode, setViewMode] = useState<NodeViewMode>(preferredNodeView)
   const [protocolPriority, setProtocolPriority] = useState<Protocol[]>(protocolDisplayOrder)
   const [page, setPage] = useState(1)
   const [loadingNodes, setLoadingNodes] = useState(true)
@@ -229,6 +231,7 @@ function Nodes() {
   }, [status?.activeIp, loadNodes])
 
   useEffect(() => { setPage(1) }, [deferredQuery, sortKey, sortDirection, status?.activeIp])
+  useEffect(() => { window.localStorage.setItem('proxygate:nodeView', viewMode) }, [viewMode])
 
   const filteredNodes = useMemo(() => {
     const normalized = deferredQuery.trim().toLowerCase()
@@ -327,10 +330,23 @@ function Nodes() {
     <section className="node-panel">
       <div className="node-toolbar">
         <label className="search-box"><SearchIcon /><input type="search" placeholder={t('nodes.search')} value={query} onChange={event => setQuery(event.target.value)} /></label>
-        <div className="sort-control"><span>{t('nodes.sort')}</span><select value={sortKey} onChange={event => { sortTouched.current = true; setSortKey(event.target.value as SortKey) }}>{Object.entries(sortLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><button title={t('nodes.toggleSort')} onClick={() => { sortTouched.current = true; setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc') }}>{sortDirection === 'asc' ? '↑' : '↓'}</button></div>
+        <div className="node-toolbar-right">
+          <div className="sort-control"><span>{t('nodes.sort')}</span><select value={sortKey} onChange={event => { sortTouched.current = true; setSortKey(event.target.value as SortKey) }}>{Object.entries(sortLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><button title={t('nodes.toggleSort')} onClick={() => { sortTouched.current = true; setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc') }}>{sortDirection === 'asc' ? '↑' : '↓'}</button></div>
+          <div className="view-switch" role="group" aria-label={t('nodes.viewMode')}>
+            <button type="button" className={viewMode === 'cards' ? 'active' : ''} aria-pressed={viewMode === 'cards'} title={t('nodes.viewCards')} onClick={() => setViewMode('cards')}><GridIcon /><span>{t('nodes.viewCards')}</span></button>
+            <button type="button" className={viewMode === 'list' ? 'active' : ''} aria-pressed={viewMode === 'list'} title={t('nodes.viewList')} onClick={() => setViewMode('list')}><ListIcon /><span>{t('nodes.viewList')}</span></button>
+            <button type="button" className={viewMode === 'table' ? 'active' : ''} aria-pressed={viewMode === 'table'} title={t('nodes.viewTable')} onClick={() => setViewMode('table')}><TableIcon /><span>{t('nodes.viewTable')}</span></button>
+          </div>
+        </div>
       </div>
       <div className="node-panel-meta"><span>{t('nodes.count', { count: filteredNodes.length })}</span><span>{t('nodes.perPage', { count: pageSize })}</span></div>
-      {loadingNodes ? <NodeSkeleton /> : visibleNodes.length > 0 ? <div className="node-grid">{visibleNodes.map(node => <NodeCard key={node.ip} node={node} protocolPriority={protocolPriority} active={status?.activeIp === node.ip} activeProtocol={status?.activeIp === node.ip ? status?.activeProtocol : undefined} connecting={status?.connectingIp === node.ip} reloadStatus={loadStatus} reloadNodes={loadNodes} />)}</div> : <EmptyState query={deferredQuery} />}
+      {loadingNodes ? <NodeSkeleton /> : visibleNodes.length > 0
+        ? viewMode === 'cards'
+          ? <div className="node-grid">{visibleNodes.map(node => <NodeCard key={node.ip} node={node} protocolPriority={protocolPriority} active={status?.activeIp === node.ip} activeProtocol={status?.activeIp === node.ip ? status?.activeProtocol : undefined} connecting={status?.connectingIp === node.ip} reloadStatus={loadStatus} reloadNodes={loadNodes} />)}</div>
+          : viewMode === 'list'
+            ? <div className="node-list">{visibleNodes.map(node => <NodeRow key={node.ip} node={node} protocolPriority={protocolPriority} active={status?.activeIp === node.ip} activeProtocol={status?.activeIp === node.ip ? status?.activeProtocol : undefined} connecting={status?.connectingIp === node.ip} reloadStatus={loadStatus} />)}</div>
+            : <NodeTable nodes={visibleNodes} protocolPriority={protocolPriority} status={status} reloadStatus={loadStatus} />
+        : <EmptyState query={deferredQuery} />}
       {pageCount > 1 && <Pagination page={currentPage} pageCount={pageCount} onChange={setPage} />}
     </section>
   </div>
@@ -435,6 +451,105 @@ function ErrorTooltip({ label, message }: { label: string; message: string }) {
   return <span className="error-tooltip" tabIndex={0} data-tooltip={message} aria-label={`${label}: ${message}`}>{label}</span>
 }
 
+function NodeStateBadge({ active, connecting, activeProtocol }: { active: boolean; connecting: boolean; activeProtocol?: Protocol }) {
+  const { t } = useTranslation()
+  if (active) return <span className="live-badge">{t('node.active')}{activeProtocol ? ` · ${protocolLabels[activeProtocol]}` : ''}</span>
+  if (connecting) return <span className="pending-badge">{t('node.connecting')}</span>
+  return <span className="idle-badge">—</span>
+}
+
+function NodeSelectButton({ node, active, connecting, reloadStatus }: { node: Node; active: boolean; connecting: boolean; reloadStatus: () => Promise<void> }) {
+  const { t } = useTranslation()
+  const [selecting, setSelecting] = useState(false)
+  const [error, setError] = useState('')
+
+  const select = async () => {
+    setError(''); setSelecting(true)
+    try {
+      await api.post('/api/nodes/select', { ip: node.ip, protocol: '' })
+      await reloadStatus()
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setSelecting(false)
+    }
+  }
+
+  return <button type="button" className={`secondary-button compact-action ${error ? 'error-tooltip' : ''}`} data-tooltip={error || undefined} aria-label={error ? t('node.connectFailedLabel', { error }) : undefined} disabled={connecting || selecting} onClick={select}>{connecting || selecting ? <><Spinner />{t('node.connectingAction')}</> : error ? t('node.connectFailed') : active ? t('node.reconnectPriority') : t('node.switch')}</button>
+}
+
+const NodeRow = memo(function NodeRow({ node, protocolPriority, active, activeProtocol, connecting, reloadStatus }: {
+  node: Node
+  protocolPriority: Protocol[]
+  active: boolean
+  activeProtocol?: Protocol
+  connecting: boolean
+  reloadStatus: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const availableProtocols = orderedProtocols(node.protocols, protocolPriority)
+  return <article className={`node-row ${active ? 'active' : ''}`}>
+    <div className="node-row-identity">
+      <span className="country-mark small" aria-label={node.countryLong}>{countryFlag(node.countryShort)}</span>
+      <div><strong>{node.countryShort || '—'} <span className="mono">{node.ip}</span></strong><small title={node.message}>{node.operator || node.hostName || t('node.unknownOperator')}</small></div>
+    </div>
+    <div className="protocol-list compact">{availableProtocols.map(protocol => <span key={protocol}>{protocolLabels[protocol]}</span>)}</div>
+    <div className="node-row-metrics">
+      <span><small>{t('node.vpnGate')}</small><b>{formatRate(node.speedBps)}</b></span>
+      <span><small>{t('node.measured')}</small><b className={node.speedTestFailed ? 'failed' : node.measuredBps ? 'accent' : ''}>{node.speedTestFailed ? t('node.failed') : formatRate(node.measuredBps)}</b></span>
+      <span><small>{t('node.latency')}</small><b>{node.pingMs > 0 ? `${node.pingMs} ms` : '—'}</b></span>
+      <span><small>{t('node.score')}</small><b>{Math.round(node.score)}</b></span>
+    </div>
+    <div className="node-row-state"><NodeStateBadge active={active} connecting={connecting} activeProtocol={activeProtocol} /></div>
+    <NodeSelectButton node={node} active={active} connecting={connecting} reloadStatus={reloadStatus} />
+  </article>
+})
+
+function NodeTable({ nodes, protocolPriority, status, reloadStatus }: {
+  nodes: Node[]
+  protocolPriority: Protocol[]
+  status?: Status
+  reloadStatus: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  return <div className="node-table-wrap">
+    <table className="node-table">
+      <thead><tr>
+        <th>{t('nodes.tableNode')}</th>
+        <th>{t('nodes.tableOperator')}</th>
+        <th>{t('nodes.tableProtocols')}</th>
+        <th className="num">{t('node.vpnGate')}</th>
+        <th className="num">{t('node.measured')}</th>
+        <th className="num">{t('node.latency')}</th>
+        <th className="num">{t('node.score')}</th>
+        <th>{t('nodes.tableState')}</th>
+        <th />
+      </tr></thead>
+      <tbody>
+        {nodes.map(node => {
+          const active = status?.activeIp === node.ip
+          const connecting = status?.connectingIp === node.ip
+          return <tr key={node.ip} className={active ? 'active' : ''}>
+            <td><div className="table-node"><span className="country-mark small">{countryFlag(node.countryShort)}</span><div><strong>{node.countryShort || '—'}</strong><span className="mono">{node.ip}</span></div></div></td>
+            <td><span className="table-operator" title={node.message}>{node.operator || node.hostName || t('node.unknownOperator')}</span></td>
+            <td><div className="protocol-list compact">{orderedProtocols(node.protocols, protocolPriority).map(protocol => <span key={protocol}>{protocolLabels[protocol]}</span>)}</div></td>
+            <td className="num">{formatRate(node.speedBps)}</td>
+            <td className={`num ${node.speedTestFailed ? 'failed' : node.measuredBps ? 'accent' : ''}`}>{node.speedTestFailed ? t('node.failed') : formatRate(node.measuredBps)}</td>
+            <td className="num">{node.pingMs > 0 ? `${node.pingMs} ms` : '—'}</td>
+            <td className="num">{Math.round(node.score)}</td>
+            <td><NodeStateBadge active={active} connecting={connecting} activeProtocol={active ? status?.activeProtocol : undefined} /></td>
+            <td><NodeSelectButton node={node} active={active} connecting={connecting} reloadStatus={reloadStatus} /></td>
+          </tr>
+        })}
+      </tbody>
+    </table>
+  </div>
+}
+
+function GridIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg> }
+function ListIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg> }
+function TableIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M9 9v11M15 9v11" /></svg> }
+
 function Pagination({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (page: number) => void }) {
   const { t } = useTranslation()
   const pages = Array.from({ length: Math.min(5, pageCount) }, (_, index) => {
@@ -453,12 +568,15 @@ function EmptyState({ query }: { query: string }) {
   return <div className="empty-state"><SearchIcon /><h3>{query ? t('nodes.noMatches') : t('nodes.noNodes')}</h3><p>{query ? t('nodes.shortenSearch') : t('nodes.refreshFirst')}</p></div>
 }
 
+type SubscriptionTab = 'links' | 'builder' | 'front'
+
 function Subscription() {
   const { t } = useTranslation()
   const [info, setInfo] = useState<SubscriptionInfo>()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState('')
+  const [tab, setTab] = useState<SubscriptionTab>('links')
 
   const load = useCallback(() => {
     setLoading(true)
@@ -490,42 +608,180 @@ function Subscription() {
     } catch { /* clipboard unavailable */ }
   }
 
-  const linkField = (key: string, label: string, hint: string, value: string) => (
-    <Field label={label} hint={hint} wide>
-      <div className="link-copy">
-        <input readOnly value={value} placeholder="—" onFocus={event => event.currentTarget.select()} />
-        <button type="button" className="quiet-button" disabled={!value} onClick={() => copy(key, value)}>{copied === key ? t('subscription.copied') : t('subscription.copy')}</button>
-      </div>
-    </Field>
-  )
-
   return <div className="page-stack settings-page">
     <header className="page-heading">
       <div><p className="eyebrow">{t('subscription.eyebrow')}</p><h1>{t('subscription.heading')}</h1><p>{t('subscription.description')}</p></div>
       <button className="quiet-button" disabled={loading} onClick={load}>{loading ? <Spinner /> : <RefreshIcon />}{t('subscription.refresh')}</button>
     </header>
+    <nav className="sub-tabs" role="tablist" aria-label={t('subscription.tabs.label')}>
+      {(['links', 'builder', 'front'] as SubscriptionTab[]).map(value => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{t(`subscription.tabs.${value}`)}</button>)}
+    </nav>
     {error && <Notice tone="danger">{error}</Notice>}
     {info && !info.enabled && <Notice tone="warning">{t('subscription.disabled')}</Notice>}
-    {info && info.enabled && <>
-      <SettingsSection index="01" title={t('subscription.linksTitle')} description={t('subscription.linksDescription')}>
-        {linkField('v2ray', t('subscription.v2rayLabel'), t('subscription.v2rayHint'), info.v2rayUrl)}
-        {linkField('clash', t('subscription.clashLabel'), t('subscription.clashHint'), info.clashUrl)}
-        {linkField('auto', t('subscription.autoLabel'), t('subscription.autoHint'), info.autoUrl)}
-      </SettingsSection>
-      <SettingsSection index="02" title={t('subscription.detailTitle')} description={t('subscription.detailDescription')}>
-        <Field label={t('subscription.protocol')}><input readOnly value={`Trojan · WebSocket · TLS${info.udp ? ' · UDP' : ''}`} /></Field>
-        <Field label={t('subscription.wsPath')}><input readOnly value={info.trojanPath} /></Field>
-        <Field label={t('subscription.publicHost')}><input readOnly value={info.publicHost || '—'} /></Field>
-        <Field label={t('subscription.token')}><input readOnly value={info.token} onFocus={event => event.currentTarget.select()} /></Field>
-      </SettingsSection>
-      <section className="status-grid">
-        <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsReady')}</span><small>{t('subscription.slotsTotal', { count: info.slots.total })}</small></div><strong>{info.slots.ready}</strong><p>{t('subscription.readyHint')}</p></article>
-        <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsSwitching')}</span><i /></div><strong>{info.slots.switching}</strong><p>{t('subscription.switchingHint')}</p></article>
-        <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsError')}</span></div><strong>{info.slots.error}</strong><p>{t('subscription.errorHint')}</p></article>
-        <article className="status-card"><div className="status-card-head"><span>{t('subscription.nodesInProfile')}</span><small>{t('subscription.nodesUnit')}</small></div><strong>{info.slots.ready}</strong><p>{t('subscription.nodesHint')}</p></article>
-      </section>
-    </>}
+    {info && info.enabled && tab === 'links' && <SubscriptionLinks info={info} copy={copy} copied={copied} />}
+    {info && tab === 'builder' && <SubscriptionBuilder info={info} copy={copy} copied={copied} />}
+    {info && tab === 'front' && <FrontProxyPanel initial={info.frontProxy} onSaved={load} />}
   </div>
+}
+
+function LinkField({ fieldKey, label, hint, value, copied, copy }: { fieldKey: string; label: string; hint: string; value: string; copied: string; copy: (key: string, value: string) => void }) {
+  const { t } = useTranslation()
+  return <Field label={label} hint={hint} wide>
+    <div className="link-copy">
+      <input readOnly value={value} placeholder="—" onFocus={event => event.currentTarget.select()} />
+      <button type="button" className="quiet-button" disabled={!value} onClick={() => copy(fieldKey, value)}>{copied === fieldKey ? t('subscription.copied') : t('subscription.copy')}</button>
+    </div>
+  </Field>
+}
+
+function SubscriptionLinks({ info, copy, copied }: { info: SubscriptionInfo; copy: (key: string, value: string) => void; copied: string }) {
+  const { t } = useTranslation()
+  return <>
+    <SettingsSection index="01" title={t('subscription.linksTitle')} description={t('subscription.linksDescription')}>
+      <LinkField fieldKey="v2ray" label={t('subscription.v2rayLabel')} hint={t('subscription.v2rayHint')} value={info.v2rayUrl} copied={copied} copy={copy} />
+      <LinkField fieldKey="clash" label={t('subscription.clashLabel')} hint={t('subscription.clashHint')} value={info.clashUrl} copied={copied} copy={copy} />
+      <LinkField fieldKey="auto" label={t('subscription.autoLabel')} hint={t('subscription.autoHint')} value={info.autoUrl} copied={copied} copy={copy} />
+    </SettingsSection>
+    <SettingsSection index="02" title={t('subscription.detailTitle')} description={t('subscription.detailDescription')}>
+      <Field label={t('subscription.protocol')}><input readOnly value={`Trojan · WebSocket · TLS${info.udp ? ' · UDP' : ''}`} /></Field>
+      <Field label={t('subscription.wsPath')}><input readOnly value={info.trojanPath} /></Field>
+      <Field label={t('subscription.publicHost')}><input readOnly value={info.publicHost || '—'} /></Field>
+      <Field label={t('subscription.token')}><input readOnly value={info.token} onFocus={event => event.currentTarget.select()} /></Field>
+    </SettingsSection>
+    <section className="status-grid">
+      <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsReady')}</span><small>{t('subscription.slotsTotal', { count: info.slots.total })}</small></div><strong>{info.slots.ready}</strong><p>{t('subscription.readyHint')}</p></article>
+      <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsSwitching')}</span><i /></div><strong>{info.slots.switching}</strong><p>{t('subscription.switchingHint')}</p></article>
+      <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsError')}</span></div><strong>{info.slots.error}</strong><p>{t('subscription.errorHint')}</p></article>
+      <article className="status-card"><div className="status-card-head"><span>{t('subscription.nodesInProfile')}</span><small>{t('subscription.nodesUnit')}</small></div><strong>{info.slots.ready}</strong><p>{t('subscription.nodesHint')}</p></article>
+    </section>
+  </>
+}
+
+type SubscriptionOptions = { count: number; countries: string[]; exclude: string[]; shuffle: boolean; group: boolean; sort: string }
+
+function buildSubscriptionUrl(base: string, options: SubscriptionOptions) {
+  if (!base) return ''
+  const params = new URLSearchParams()
+  if (options.count > 0) params.set('count', String(options.count))
+  if (options.countries.length > 0) params.set('countries', options.countries.join(','))
+  if (options.exclude.length > 0) params.set('exclude', options.exclude.join(','))
+  if (options.shuffle) params.set('shuffle', '1')
+  if (options.group) params.set('group', 'country')
+  if (options.sort) params.set('sort', options.sort)
+  const query = params.toString()
+  if (!query) return base
+  return `${base}${base.includes('?') ? '&' : '?'}${query}`
+}
+
+function SubscriptionBuilder({ info, copy, copied }: { info: SubscriptionInfo; copy: (key: string, value: string) => void; copied: string }) {
+  const { t } = useTranslation()
+  const [count, setCount] = useState(0)
+  const [countries, setCountries] = useState<string[]>([])
+  const [exclude, setExclude] = useState<string[]>([])
+  const [shuffle, setShuffle] = useState(false)
+  const [group, setGroup] = useState(false)
+  const [sort, setSort] = useState('')
+
+  const countryEntries = useMemo(() => Object.entries(info.countries).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])), [info.countries])
+  const options: SubscriptionOptions = { count, countries, exclude, shuffle, group, sort }
+  const v2rayUrl = buildSubscriptionUrl(info.v2rayUrl, options)
+  const clashUrl = buildSubscriptionUrl(info.clashUrl, options)
+  const available = useMemo(() => info.nodes.filter(node => {
+    if (node.country && exclude.includes(node.country)) return false
+    if (countries.length === 0) return true
+    return Boolean(node.country && countries.includes(node.country))
+  }), [info.nodes, countries, exclude])
+  const preview = count > 0 ? available.slice(0, count) : available
+
+  const toggleInclude = (code: string) => {
+    setExclude(current => current.filter(item => item !== code))
+    setCountries(current => current.includes(code) ? current.filter(item => item !== code) : [...current, code])
+  }
+  const toggleExclude = (code: string) => {
+    setCountries(current => current.filter(item => item !== code))
+    setExclude(current => current.includes(code) ? current.filter(item => item !== code) : [...current, code])
+  }
+
+  return <>
+    <SettingsSection index="01" title={t('subscription.builderTitle')} description={t('subscription.builderDescription')}>
+      <Field label={t('subscription.builderCount')} hint={t('subscription.builderCountHint')}><input type="number" min={0} max={info.nodes.length} value={count} onChange={event => setCount(Math.max(0, Number(event.target.value) || 0))} /></Field>
+      <Field label={t('subscription.builderSort')} hint={t('subscription.builderSortHint')}><select value={sort} onChange={event => setSort(event.target.value)}><option value="">{t('subscription.builderSortDefault')}</option><option value="country">{t('subscription.builderSortCountry')}</option><option value="name">{t('subscription.builderSortName')}</option></select></Field>
+      <label className="toggle-field"><input type="checkbox" checked={shuffle} onChange={event => setShuffle(event.target.checked)} /><span><strong>{t('subscription.builderShuffle')}</strong><small>{t('subscription.builderShuffleHint')}</small></span></label>
+      <label className="toggle-field"><input type="checkbox" checked={group} onChange={event => setGroup(event.target.checked)} /><span><strong>{t('subscription.builderGroup')}</strong><small>{t('subscription.builderGroupHint')}</small></span></label>
+      <div className="country-picker wide">
+        <div className="country-picker-head"><strong>{t('subscription.builderCountries')}</strong><small>{t('subscription.builderCountriesHint')}</small><button type="button" className="quiet-button" disabled={countries.length === 0} onClick={() => setCountries([])}>{t('subscription.builderClear')}</button></div>
+        <div className="chip-grid">{countryEntries.map(([code, total]) => <button type="button" key={code} className={`chip ${countries.includes(code) ? 'active' : ''}`} aria-pressed={countries.includes(code)} onClick={() => toggleInclude(code)}><span>{countryFlag(code)} {code}</span><small>{total}</small></button>)}</div>
+      </div>
+      <div className="country-picker wide exclude">
+        <div className="country-picker-head"><strong>{t('subscription.builderExclude')}</strong><small>{t('subscription.builderExcludeHint')}</small><button type="button" className="quiet-button" disabled={exclude.length === 0} onClick={() => setExclude([])}>{t('subscription.builderClear')}</button></div>
+        <div className="chip-grid">{countryEntries.map(([code, total]) => <button type="button" key={code} className={`chip exclude ${exclude.includes(code) ? 'active' : ''}`} aria-pressed={exclude.includes(code)} onClick={() => toggleExclude(code)}><span>{countryFlag(code)} {code}</span><small>{total}</small></button>)}</div>
+      </div>
+    </SettingsSection>
+    <SettingsSection index="02" title={t('subscription.builderPreview')} description={t('subscription.builderPreviewHint')}>
+      <div className="builder-preview wide">
+        <div className="builder-preview-head"><strong>{t('subscription.builderPreviewCount', { count: preview.length, total: info.nodes.length })}</strong>{shuffle && <span className="mini-badge">{t('subscription.builderShuffled')}</span>}</div>
+        {preview.length === 0 ? <p className="muted-line">{t('subscription.builderEmpty')}</p> : <div className="preview-list">{preview.slice(0, 60).map(node => <div className="preview-item" key={node.slotId}><span>{countryFlag(node.country || '')}</span><span title={node.asnOrg}>{node.name}</span>{node.chained && <em>{t('subscription.chained')}</em>}</div>)}</div>}
+        {preview.length > 60 && <small>{t('subscription.builderMore', { count: preview.length - 60 })}</small>}
+      </div>
+    </SettingsSection>
+    <SettingsSection index="03" title={t('subscription.builderGenerate')} description={t('subscription.builderGenerateHint')}>
+      <LinkField fieldKey="builder-v2ray" label={t('subscription.v2rayLabel')} hint={t('subscription.builderUrlHint')} value={v2rayUrl} copied={copied} copy={copy} />
+      <LinkField fieldKey="builder-clash" label={t('subscription.clashLabel')} hint={t('subscription.builderUrlHint')} value={clashUrl} copied={copied} copy={copy} />
+      <p className="section-note wide">{t('subscription.builderNote')}</p>
+    </SettingsSection>
+  </>
+}
+
+function FrontProxyPanel({ initial, onSaved }: { initial: FrontProxySettings; onSaved: () => void }) {
+  const { t } = useTranslation()
+  const [settings, setSettings] = useState<FrontProxySettings>(initial)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+
+  useEffect(() => { setSettings(initial) }, [initial])
+
+  const update = <Key extends keyof FrontProxySettings>(key: Key, value: FrontProxySettings[Key]) => setSettings(current => ({ ...current, [key]: value }))
+  const needsURL = ['socks5', 'socks5h', 'http', 'https', 'list'].includes(settings.type)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setError(''); setMessage(''); setSaving(true)
+    try {
+      const saved = await api.put<FrontProxySettings>('/api/matrix/front-proxy', settings)
+      setSettings(saved)
+      setMessage(t('subscription.front.saved'))
+      onSaved()
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <form onSubmit={submit}>
+    <SettingsSection index="01" title={t('subscription.front.title')} description={t('subscription.front.description')}>
+      <label className="toggle-field wide"><input type="checkbox" checked={settings.enabled} onChange={event => update('enabled', event.target.checked)} /><span><strong>{t('subscription.front.enable')}</strong><small>{t('subscription.front.enableHint')}</small></span></label>
+      <Field label={t('subscription.front.type')} hint={t('subscription.front.typeHint')}>
+        <select value={settings.type} onChange={event => update('type', event.target.value)}>
+          <option value="socks5">SOCKS5</option>
+          <option value="socks5h">SOCKS5 (remote DNS)</option>
+          <option value="http">HTTP CONNECT</option>
+          <option value="https">HTTPS CONNECT</option>
+          <option value="list">{t('subscription.front.typeList')}</option>
+          <option value="slot">{t('subscription.front.typeSlot')}</option>
+          <option value="api">{t('subscription.front.typeApi')}</option>
+        </select>
+      </Field>
+      {needsURL && <Field label={t('subscription.front.url')} hint={t('subscription.front.urlHint')} wide><input placeholder="socks5://user:pass@HOST:1080" value={settings.url} onChange={event => update('url', event.target.value)} /></Field>}
+      {settings.type === 'slot' && <Field label={t('subscription.front.slot')} hint={t('subscription.front.slotHint')}><input type="number" min={1} value={settings.slot} onChange={event => update('slot', Number(event.target.value) || 0)} /></Field>}
+      {settings.type === 'api' && <Field label={t('subscription.front.api')} hint={t('subscription.front.apiHint')} wide><input placeholder="https://API/proxies" value={settings.api} onChange={event => update('api', event.target.value)} /></Field>}
+      <Field label={t('subscription.front.timeout')} hint={t('subscription.front.timeoutHint')}><input placeholder="15s" value={settings.timeout} onChange={event => update('timeout', event.target.value)} /></Field>
+      <p className="section-note wide">{t('subscription.front.compatHint')}</p>
+    </SettingsSection>
+    {error && <Notice tone="danger">{error}</Notice>}
+    {message && <Notice tone="success">{message}</Notice>}
+    <div className="settings-actions"><div><strong>{t('subscription.front.applies')}</strong><small>{t('subscription.front.appliesHint')}</small></div><button className="primary-button" disabled={saving}>{saving ? <Spinner /> : null}{t('subscription.front.save')}</button></div>
+  </form>
 }
 
 function Settings() {
@@ -696,6 +952,10 @@ function preferredTheme(): Theme {
   const saved = window.localStorage.getItem('proxygate:theme')
   if (saved === 'light' || saved === 'dark') return saved
   return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+}
+function preferredNodeView(): NodeViewMode {
+  const saved = window.localStorage.getItem('proxygate:nodeView')
+  return saved === 'cards' || saved === 'list' || saved === 'table' ? saved : 'cards'
 }
 function normalizedPing(value: number) { return value > 0 ? value : Number.MAX_SAFE_INTEGER }
 function stateLabel(state: string | undefined, t: TFunction) {

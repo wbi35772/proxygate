@@ -2,10 +2,13 @@ package matrix
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -45,6 +48,7 @@ type SlotStatus struct {
 	ASN          string    `json:"asn,omitempty"`
 	ASNOrg       string    `json:"asnOrg,omitempty"`
 	Residential  bool      `json:"residential"`
+	Chained      bool      `json:"chained"`
 	FailCount    int       `json:"failCount"`
 	LastError    string    `json:"lastError,omitempty"`
 	LastSwitch   time.Time `json:"lastSwitch,omitzero"`
@@ -100,10 +104,29 @@ func (m *Manager) Start() error {
 	m.started = true
 	m.mu.Unlock()
 	if settings.Matrix.Autostart {
+		persisted := m.loadPersistedSlots()
 		go func() {
+			allocated := make(map[int]struct{}, len(persisted))
+			for _, entry := range persisted {
+				if m.ctx.Err() != nil {
+					return
+				}
+				if entry.SlotID < 1 || entry.SlotID > settings.Matrix.Slots {
+					continue
+				}
+				options := AllocateOptions{SlotID: entry.SlotID, Country: entry.Country, Protocol: entry.Protocol, Mode: entry.Mode}
+				if _, _, err := m.Allocate(options); err != nil {
+					m.logger.Printf("[matrix] restore slot=%d: %v", entry.SlotID, err)
+					continue
+				}
+				allocated[entry.SlotID] = struct{}{}
+			}
 			for id := 1; id <= settings.Matrix.Slots; id++ {
 				if m.ctx.Err() != nil {
 					return
+				}
+				if _, exists := allocated[id]; exists {
+					continue
 				}
 				if _, _, err := m.Allocate(AllocateOptions{SlotID: id, Mode: ModeSticky}); err != nil {
 					m.logger.Printf("[matrix] autostart slot=%d: %v", id, err)
@@ -166,6 +189,7 @@ func (m *Manager) Allocate(options AllocateOptions) (*Slot, bool, error) {
 		}
 		if existing, exists := m.slots[options.SlotID]; exists {
 			existing.Configure(country, protocol, mode)
+			m.persistSlotsLocked()
 			return existing, false, nil
 		}
 	} else {
@@ -188,6 +212,7 @@ func (m *Manager) Allocate(options AllocateOptions) (*Slot, bool, error) {
 	}
 	m.slots[options.SlotID] = slot
 	slot.RequestSwitch("allocate", true)
+	m.persistSlotsLocked()
 	return slot, true, nil
 }
 
@@ -358,4 +383,88 @@ func (m *Manager) excludeIPs(slotID int) []string {
 		}
 	}
 	return result
+}
+
+// persistedSlot is the durable description of a slot so a container restart
+// re-allocates the same country/protocol/mode instead of resetting to sticky.
+type persistedSlot struct {
+	SlotID   int    `json:"slotId"`
+	Country  string `json:"country,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
+	Mode     string `json:"mode,omitempty"`
+}
+
+func (m *Manager) persistencePath() string {
+	settings := m.config.Get()
+	if strings.TrimSpace(settings.DatabasePath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(settings.DatabasePath), "matrix-slots.json")
+}
+
+func (m *Manager) loadPersistedSlots() []persistedSlot {
+	path := m.persistencePath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			m.logger.Printf("[matrix] read slot state: %v", err)
+		}
+		return nil
+	}
+	var entries []persistedSlot
+	if err := json.Unmarshal(data, &entries); err != nil {
+		m.logger.Printf("[matrix] parse slot state: %v", err)
+		return nil
+	}
+	valid := entries[:0]
+	for _, entry := range entries {
+		if entry.SlotID < 1 {
+			continue
+		}
+		if entry.Mode != ModeRotating {
+			entry.Mode = ModeSticky
+		}
+		valid = append(valid, entry)
+	}
+	m.logger.Printf("[matrix] restoring %d persisted slots", len(valid))
+	return valid
+}
+
+// persistSlotsLocked writes the in-memory slot set while m.mu is already held.
+func (m *Manager) persistSlotsLocked() {
+	path := m.persistencePath()
+	if path == "" {
+		return
+	}
+	entries := make([]persistedSlot, 0, len(m.slots))
+	for _, slot := range m.slots {
+		status := slot.Status()
+		entries = append(entries, persistedSlot{
+			SlotID:   status.SlotID,
+			Country:  status.Country,
+			Protocol: status.Protocol,
+			Mode:     status.Mode,
+		})
+	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].SlotID < entries[right].SlotID })
+	encoded, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		m.logger.Printf("[matrix] encode slot state: %v", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		m.logger.Printf("[matrix] create slot state dir: %v", err)
+		return
+	}
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
+		m.logger.Printf("[matrix] write slot state: %v", err)
+		return
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		m.logger.Printf("[matrix] replace slot state: %v", err)
+	}
 }

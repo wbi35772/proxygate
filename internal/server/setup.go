@@ -51,6 +51,8 @@ func (s *Server) Setup() {
 	api.Post("/logout", s.logout)
 	api.Get("/status", s.status)
 	api.Get("/subscription", s.subscription)
+	api.Get("/matrix/front-proxy", s.getFrontProxy)
+	api.Put("/matrix/front-proxy", s.putFrontProxy)
 	api.Get("/services", s.serviceStatuses)
 	api.Post("/services/:name/restart", s.restartService)
 	api.Get("/nodes", s.nodes)
