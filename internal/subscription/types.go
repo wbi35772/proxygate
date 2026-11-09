@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/ExpTechTW/proxygate/internal/config"
 	"github.com/ExpTechTW/proxygate/internal/matrix"
@@ -22,6 +23,10 @@ type Server struct {
 	mu          sync.RWMutex
 	slots       map[string]int
 	trojanSlots map[[trojanKeyLength]byte]int
+
+	cacheMu     sync.RWMutex
+	cachedNodes []trojanNode
+	cachedAt    time.Time
 
 	httpServer *http.Server
 	listener   net.Listener

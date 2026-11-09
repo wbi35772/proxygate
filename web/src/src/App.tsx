@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 
 import { api } from './api'
 import { localeConfig, resolvedLocale } from './i18n'
-import type { Config, Node, Protocol, Status, VersionInfo } from './types'
+import type { Config, Node, Protocol, Status, SubscriptionInfo, VersionInfo } from './types'
 
 const protocolLabels: Record<Protocol, string> = {
   openvpn_udp: 'OpenVPN UDP',
@@ -15,7 +15,7 @@ const protocolLabels: Record<Protocol, string> = {
   l2tp: 'L2TP/IPsec',
 }
 
-type View = 'nodes' | 'settings'
+type View = 'nodes' | 'subscription' | 'settings'
 type Theme = 'light' | 'dark'
 type SortKey = 'speedBps' | 'pingMs' | 'score' | 'measuredBps' | 'countryShort'
 
@@ -63,6 +63,7 @@ function App() {
       </div>
       <nav className="primary-nav" aria-label={t('app.navigation')}>
         <button className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}><span>{t('app.nodes')}</span><small>{t('app.nodes')}</small></button>
+        <button className={view === 'subscription' ? 'active' : ''} onClick={() => setView('subscription')}><span>{t('app.subscription')}</span><small>{t('app.subscription')}</small></button>
         <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}><span>{t('app.settings')}</span><small>{t('app.settings')}</small></button>
       </nav>
       <div className="topbar-actions">
@@ -71,7 +72,7 @@ function App() {
         <button className="quiet-button" onClick={logout}>{t('app.logout')}</button>
       </div>
     </header>
-    <main className="workspace">{view === 'nodes' ? <Nodes /> : <Settings />}</main>
+    <main className="workspace">{view === 'nodes' ? <Nodes /> : view === 'subscription' ? <Subscription /> : <Settings />}</main>
   </div>
 }
 
@@ -450,6 +451,81 @@ function NodeSkeleton() {
 function EmptyState({ query }: { query: string }) {
   const { t } = useTranslation()
   return <div className="empty-state"><SearchIcon /><h3>{query ? t('nodes.noMatches') : t('nodes.noNodes')}</h3><p>{query ? t('nodes.shortenSearch') : t('nodes.refreshFirst')}</p></div>
+}
+
+function Subscription() {
+  const { t } = useTranslation()
+  const [info, setInfo] = useState<SubscriptionInfo>()
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState('')
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.get<SubscriptionInfo>('/api/subscription')
+      .then(value => { setInfo(value); setError('') })
+      .catch(reason => setError(errorMessage(reason)))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(load, [load])
+
+  const copy = async (key: string, value: string) => {
+    if (!value) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+      } else {
+        const field = document.createElement('textarea')
+        field.value = value
+        field.style.position = 'fixed'
+        field.style.opacity = '0'
+        document.body.appendChild(field)
+        field.select()
+        document.execCommand('copy')
+        field.remove()
+      }
+      setCopied(key)
+      window.setTimeout(() => setCopied(current => current === key ? '' : current), 1600)
+    } catch { /* clipboard unavailable */ }
+  }
+
+  const linkField = (key: string, label: string, hint: string, value: string) => (
+    <Field label={label} hint={hint} wide>
+      <div className="link-copy">
+        <input readOnly value={value} placeholder="—" onFocus={event => event.currentTarget.select()} />
+        <button type="button" className="quiet-button" disabled={!value} onClick={() => copy(key, value)}>{copied === key ? t('subscription.copied') : t('subscription.copy')}</button>
+      </div>
+    </Field>
+  )
+
+  return <div className="page-stack settings-page">
+    <header className="page-heading">
+      <div><p className="eyebrow">{t('subscription.eyebrow')}</p><h1>{t('subscription.heading')}</h1><p>{t('subscription.description')}</p></div>
+      <button className="quiet-button" disabled={loading} onClick={load}>{loading ? <Spinner /> : <RefreshIcon />}{t('subscription.refresh')}</button>
+    </header>
+    {error && <Notice tone="danger">{error}</Notice>}
+    {info && !info.enabled && <Notice tone="warning">{t('subscription.disabled')}</Notice>}
+    {info && info.enabled && <>
+      <SettingsSection index="01" title={t('subscription.linksTitle')} description={t('subscription.linksDescription')}>
+        {linkField('v2ray', t('subscription.v2rayLabel'), t('subscription.v2rayHint'), info.v2rayUrl)}
+        {linkField('clash', t('subscription.clashLabel'), t('subscription.clashHint'), info.clashUrl)}
+        {linkField('auto', t('subscription.autoLabel'), t('subscription.autoHint'), info.autoUrl)}
+      </SettingsSection>
+      <SettingsSection index="02" title={t('subscription.detailTitle')} description={t('subscription.detailDescription')}>
+        <Field label={t('subscription.protocol')}><input readOnly value={`Trojan · WebSocket · TLS${info.udp ? ' · UDP' : ''}`} /></Field>
+        <Field label={t('subscription.wsPath')}><input readOnly value={info.trojanPath} /></Field>
+        <Field label={t('subscription.publicHost')}><input readOnly value={info.publicHost || '—'} /></Field>
+        <Field label={t('subscription.token')}><input readOnly value={info.token} onFocus={event => event.currentTarget.select()} /></Field>
+      </SettingsSection>
+      <section className="status-grid">
+        <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsReady')}</span><small>{t('subscription.slotsTotal', { count: info.slots.total })}</small></div><strong>{info.slots.ready}</strong><p>{t('subscription.readyHint')}</p></article>
+        <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsSwitching')}</span><i /></div><strong>{info.slots.switching}</strong><p>{t('subscription.switchingHint')}</p></article>
+        <article className="status-card"><div className="status-card-head"><span>{t('subscription.slotsError')}</span></div><strong>{info.slots.error}</strong><p>{t('subscription.errorHint')}</p></article>
+        <article className="status-card"><div className="status-card-head"><span>{t('subscription.nodesInProfile')}</span><small>{t('subscription.nodesUnit')}</small></div><strong>{info.slots.ready}</strong><p>{t('subscription.nodesHint')}</p></article>
+      </section>
+    </>}
+  </div>
 }
 
 function Settings() {

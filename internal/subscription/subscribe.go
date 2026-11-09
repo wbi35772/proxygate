@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ExpTechTW/proxygate/internal/matrix"
 )
@@ -50,9 +51,20 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 			path:     trojanPath,
 		})
 	}
+	if len(links) > 0 {
+		s.rememberNodes(links)
+	} else if cached, ok := s.lastGoodNodes(); ok {
+		links = cached
+	}
 
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Profile-Update-Interval", "6")
+	writer.Header().Set("X-ProxyGate-Nodes", strconv.Itoa(len(links)))
+	if len(links) == 0 {
+		writer.Header().Set("Retry-After", "60")
+		http.Error(writer, "no ready slots yet", http.StatusServiceUnavailable)
+		return
+	}
 	switch format {
 	case "clash", "mihomo", "yaml", "clash.yaml":
 		writer.Header().Set("Content-Type", "text/yaml; charset=utf-8")
@@ -147,6 +159,30 @@ func v2raySubscription(nodes []trojanNode) string {
 		lines = append(lines, node.link())
 	}
 	return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
+}
+
+// rememberNodes keeps the last non-empty node set so a subscription request
+// during a pool rebuild (container restart, slot re-allocation) still returns
+// a usable profile instead of an empty one. Slot credentials are derived from
+// the token and slot id, so cached entries stay valid across refreshes.
+func (s *Server) rememberNodes(nodes []trojanNode) {
+	if len(nodes) == 0 {
+		return
+	}
+	snapshot := append([]trojanNode(nil), nodes...)
+	s.cacheMu.Lock()
+	s.cachedNodes = snapshot
+	s.cachedAt = time.Now()
+	s.cacheMu.Unlock()
+}
+
+func (s *Server) lastGoodNodes() ([]trojanNode, bool) {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	if len(s.cachedNodes) == 0 {
+		return nil, false
+	}
+	return append([]trojanNode(nil), s.cachedNodes...), true
 }
 
 func clashProfile(nodes []trojanNode) string {

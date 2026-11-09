@@ -34,6 +34,20 @@ export interface Status {
   refreshRunning: boolean
 }
 
+export interface SubscriptionInfo {
+  enabled: boolean
+  v2rayUrl: string
+  clashUrl: string
+  autoUrl: string
+  publicHost: string
+  token: string
+  websocketPath: string
+  trojanPath: string
+  protocol: string
+  udp: boolean
+  slots: { total: number; ready: number; switching: number; error: number }
+}
+
 export interface VersionInfo {
   version: string
   release: string
