@@ -56,8 +56,8 @@ export interface SubscriptionClientInfo {
   name: string
   token: string
   count: number
-  countries: string[]
-  exclude: string[]
+  countries: string[] | null
+  exclude: string[] | null
   shuffle: boolean
   group: string
   sort: string

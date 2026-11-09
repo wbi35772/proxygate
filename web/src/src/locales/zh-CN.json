@@ -165,14 +165,14 @@
     "noNodes": "暂无可用节点",
     "shortenSearch": "请尝试缩短搜索条件或改用国家代码。",
     "refreshFirst": "请先刷新 VPN Gate 节点来源。",
-    "viewMode": "????",
-    "viewCards": "??",
-    "viewList": "??",
-    "viewTable": "??",
-    "tableNode": "??",
-    "tableOperator": "???",
-    "tableProtocols": "??",
-    "tableState": "??"
+    "viewMode": "视图",
+    "viewCards": "卡片",
+    "viewList": "列表",
+    "viewTable": "表格",
+    "tableNode": "节点",
+    "tableOperator": "运营者",
+    "tableProtocols": "协议",
+    "tableState": "状态"
   },
   "sort": {
     "speedBps": "VPN Gate 速度",
