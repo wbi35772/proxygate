@@ -75,10 +75,11 @@ type Matrix struct {
 	PreferredCountries []string `json:"preferredCountries"`
 	PreferredASNs      []string `json:"preferredAsns"`
 	Sources            []string `json:"sources"`
-	SubscriptionListen string   `json:"subscriptionListen"`
-	SubscriptionToken  string   `json:"subscriptionToken"`
-	SubscriptionPath   string   `json:"subscriptionPath"`
-	PublicSocksHost    string   `json:"publicSocksHost"`
+	SubscriptionListen     string `json:"subscriptionListen"`
+	SubscriptionToken      string `json:"subscriptionToken"`
+	SubscriptionPath       string `json:"subscriptionPath"`
+	SubscriptionTrojanPath string `json:"subscriptionTrojanPath"`
+	PublicSocksHost        string `json:"publicSocksHost"`
 }
 
 func (m *Matrix) applyDefaults() {
@@ -117,6 +118,9 @@ func (m *Matrix) applyDefaults() {
 	}
 	if m.SubscriptionPath == "" {
 		m.SubscriptionPath = "/pgws"
+	}
+	if m.SubscriptionTrojanPath == "" {
+		m.SubscriptionTrojanPath = "/pgtrojan"
 	}
 }
 
@@ -511,6 +515,9 @@ func applyEnvironmentOverrides(value *Config) {
 	}
 	if path := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_SUB_PATH")); path != "" {
 		value.Matrix.SubscriptionPath = path
+	}
+	if path := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_SUB_TROJAN_PATH")); path != "" {
+		value.Matrix.SubscriptionTrojanPath = path
 	}
 	if host := strings.TrimSpace(os.Getenv("PROXYGATE_MATRIX_PUBLIC_SOCKS_HOST")); host != "" {
 		value.Matrix.PublicSocksHost = host

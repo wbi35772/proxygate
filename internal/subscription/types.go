@@ -19,8 +19,9 @@ type Server struct {
 	matrix *matrix.Manager
 	logger *log.Logger
 
-	mu    sync.RWMutex
-	slots map[string]int
+	mu          sync.RWMutex
+	slots       map[string]int
+	trojanSlots map[[trojanKeyLength]byte]int
 
 	httpServer *http.Server
 	listener   net.Listener
@@ -40,11 +41,15 @@ func (s *Server) rebuildSlots() {
 	settings := s.config.Get().Matrix
 	token := settings.SubscriptionTokenValue()
 	slots := make(map[string]int, settings.Slots)
+	trojanSlots := make(map[[trojanKeyLength]byte]int, settings.Slots)
 	for id := 1; id <= settings.Slots; id++ {
-		slots[slotUUID(token, id)] = id
+		uuid := slotUUID(token, id)
+		slots[uuid] = id
+		trojanSlots[trojanKey(uuid)] = id
 	}
 	s.mu.Lock()
 	s.slots = slots
+	s.trojanSlots = trojanSlots
 	s.mu.Unlock()
 }
 
@@ -52,5 +57,12 @@ func (s *Server) slotID(uuid string) (int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	id, exists := s.slots[uuid]
+	return id, exists
+}
+
+func (s *Server) trojanSlotID(key [trojanKeyLength]byte) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, exists := s.trojanSlots[key]
 	return id, exists
 }

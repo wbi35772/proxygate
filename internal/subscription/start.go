@@ -24,12 +24,17 @@ func (s *Server) Start() error {
 	if path == "" {
 		path = "/pgws"
 	}
+	trojanPath := settings.SubscriptionTrojanPath
+	if trojanPath == "" {
+		trojanPath = "/pgtrojan"
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(writer, "ok\n")
 	})
 	mux.HandleFunc(path, s.handleVLESS)
+	mux.HandleFunc(trojanPath, s.handleTrojan)
 	mux.HandleFunc("/sub/", s.handleSubscription)
 	server := &http.Server{
 		Handler:           mux,

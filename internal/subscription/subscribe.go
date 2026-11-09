@@ -32,22 +32,22 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 
 	statuses, _ := s.matrix.Status()
 	host, port, tls := s.publicEndpoint(r)
-	path := settings.SubscriptionPath
-	if path == "" {
-		path = "/pgws"
+	trojanPath := settings.SubscriptionTrojanPath
+	if trojanPath == "" {
+		trojanPath = "/pgtrojan"
 	}
-	links := make([]vlessNode, 0, len(statuses))
+	links := make([]trojanNode, 0, len(statuses))
 	for _, status := range statuses {
 		if status.State != "ready" || status.ExitIP == "" {
 			continue
 		}
-		links = append(links, vlessNode{
-			name: nodeName(status),
-			uuid: slotUUID(settings.SubscriptionTokenValue(), status.SlotID),
-			host: host,
-			port: port,
-			tls:  tls,
-			path: path,
+		links = append(links, trojanNode{
+			name:     nodeName(status),
+			password: slotUUID(settings.SubscriptionTokenValue(), status.SlotID),
+			host:     host,
+			port:     port,
+			tls:      tls,
+			path:     trojanPath,
 		})
 	}
 
@@ -114,18 +114,17 @@ func nodeName(status matrix.SlotStatus) string {
 	return fmt.Sprintf("pg-%02d-%s-%s", status.SlotID, country, organization)
 }
 
-type vlessNode struct {
-	name string
-	uuid string
-	host string
-	port int
-	tls  bool
-	path string
+type trojanNode struct {
+	name     string
+	password string
+	host     string
+	port     int
+	tls      bool
+	path     string
 }
 
-func (n vlessNode) link() string {
+func (n trojanNode) link() string {
 	query := url.Values{}
-	query.Set("encryption", "none")
 	query.Set("type", "ws")
 	query.Set("host", n.host)
 	query.Set("path", n.path)
@@ -136,10 +135,10 @@ func (n vlessNode) link() string {
 	} else {
 		query.Set("security", "none")
 	}
-	return "vless://" + n.uuid + "@" + net.JoinHostPort(n.host, strconv.Itoa(n.port)) + "?" + query.Encode() + "#" + url.PathEscape(n.name)
+	return "trojan://" + url.QueryEscape(n.password) + "@" + net.JoinHostPort(n.host, strconv.Itoa(n.port)) + "?" + query.Encode() + "#" + url.PathEscape(n.name)
 }
 
-func v2raySubscription(nodes []vlessNode) string {
+func v2raySubscription(nodes []trojanNode) string {
 	if len(nodes) == 0 {
 		return ""
 	}
@@ -150,7 +149,7 @@ func v2raySubscription(nodes []vlessNode) string {
 	return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
 }
 
-func clashProfile(nodes []vlessNode) string {
+func clashProfile(nodes []trojanNode) string {
 	var builder strings.Builder
 	builder.WriteString("mixed-port: 7890\n")
 	builder.WriteString("allow-lan: false\n")
@@ -163,14 +162,16 @@ func clashProfile(nodes []vlessNode) string {
 	}
 	for _, node := range nodes {
 		builder.WriteString("  - name: " + strconv.Quote(node.name) + "\n")
-		builder.WriteString("    type: vless\n")
+		builder.WriteString("    type: trojan\n")
 		builder.WriteString("    server: " + strconv.Quote(node.host) + "\n")
 		builder.WriteString("    port: " + strconv.Itoa(node.port) + "\n")
-		builder.WriteString("    uuid: " + strconv.Quote(node.uuid) + "\n")
-		builder.WriteString("    udp: false\n")
-		builder.WriteString("    tls: true\n")
-		builder.WriteString("    servername: " + strconv.Quote(node.host) + "\n")
-		builder.WriteString("    client-fingerprint: chrome\n")
+		builder.WriteString("    password: " + strconv.Quote(node.password) + "\n")
+		builder.WriteString("    udp: true\n")
+		if node.tls {
+			builder.WriteString("    sni: " + strconv.Quote(node.host) + "\n")
+			builder.WriteString("    skip-cert-verify: false\n")
+			builder.WriteString("    client-fingerprint: chrome\n")
+		}
 		builder.WriteString("    network: ws\n")
 		builder.WriteString("    ws-opts:\n")
 		builder.WriteString("      path: " + strconv.Quote(node.path) + "\n")
