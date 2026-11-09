@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -79,13 +80,30 @@ type Matrix struct {
 	SubscriptionToken      string `json:"subscriptionToken"`
 	SubscriptionPath       string `json:"subscriptionPath"`
 	SubscriptionTrojanPath string `json:"subscriptionTrojanPath"`
-	PublicSocksHost        string `json:"publicSocksHost"`
-	FrontProxyEnabled      bool   `json:"frontProxyEnabled"`
-	FrontProxyType         string `json:"frontProxyType"`
-	FrontProxyURL          string `json:"frontProxyUrl"`
-	FrontProxySlot         int    `json:"frontProxySlot"`
-	FrontProxyAPI          string `json:"frontProxyApi"`
-	FrontProxyTimeout      string `json:"frontProxyTimeout"`
+	// SubscriptionClients are extra subscription tokens, each with optional
+	// profile presets. A client can be revoked by removing it here; its
+	// Trojan/VLESS credentials derive from its token and stop working at once.
+	SubscriptionClients []SubscriptionClient `json:"subscriptionClients,omitempty"`
+	PublicSocksHost     string               `json:"publicSocksHost"`
+	FrontProxyEnabled   bool                 `json:"frontProxyEnabled"`
+	FrontProxyType      string               `json:"frontProxyType"`
+	FrontProxyURL       string               `json:"frontProxyUrl"`
+	FrontProxySlot      int                  `json:"frontProxySlot"`
+	FrontProxyAPI       string               `json:"frontProxyApi"`
+	FrontProxyTimeout   string               `json:"frontProxyTimeout"`
+}
+
+// SubscriptionClient is a named subscription token with optional defaults.
+// Query parameters on the subscription URL override every preset.
+type SubscriptionClient struct {
+	Name      string   `json:"name"`
+	Token     string   `json:"token"`
+	Count     int      `json:"count,omitempty"`
+	Countries []string `json:"countries,omitempty"`
+	Exclude   []string `json:"exclude,omitempty"`
+	Shuffle   bool     `json:"shuffle,omitempty"`
+	Group     string   `json:"group,omitempty"`
+	Sort      string   `json:"sort,omitempty"`
 }
 
 func (m *Matrix) applyDefaults() {
@@ -145,6 +163,24 @@ func (m Matrix) SubscriptionTokenValue() string {
 	}
 	sum := sha256.Sum256([]byte(m.APIKey))
 	return hex.EncodeToString(sum[:12])
+}
+
+// MatchSubscriptionToken resolves a subscription path token to the effective
+// token used for node credentials and the matching client preset, if any.
+func (m Matrix) MatchSubscriptionToken(token string) (string, *SubscriptionClient) {
+	if token == "" {
+		return "", nil
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(m.SubscriptionTokenValue())) == 1 {
+		return m.SubscriptionTokenValue(), nil
+	}
+	for index := range m.SubscriptionClients {
+		client := &m.SubscriptionClients[index]
+		if subtle.ConstantTimeCompare([]byte(token), []byte(client.Token)) == 1 {
+			return client.Token, client
+		}
+	}
+	return "", nil
 }
 
 func (m Matrix) HarvestDuration() (time.Duration, error) {
@@ -363,7 +399,73 @@ func (c Config) validateMatrix() error {
 			return fmt.Errorf("matrix.preferredCountries contains invalid country code %q", country)
 		}
 	}
+	if err := m.validateSubscriptionClients(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (m Matrix) validateSubscriptionClients() error {
+	if len(m.SubscriptionClients) > 64 {
+		return errors.New("matrix.subscriptionClients supports at most 64 entries")
+	}
+	names := make(map[string]bool, len(m.SubscriptionClients))
+	tokens := map[string]bool{m.SubscriptionTokenValue(): true}
+	for index, client := range m.SubscriptionClients {
+		name := strings.TrimSpace(client.Name)
+		if name == "" || len(name) > 64 || strings.ContainsAny(name, "\r\n") {
+			return fmt.Errorf("matrix.subscriptionClients[%d].name must be 1-64 characters without newlines", index)
+		}
+		if names[name] {
+			return fmt.Errorf("matrix.subscriptionClients contains duplicate name %q", name)
+		}
+		names[name] = true
+		token := strings.TrimSpace(client.Token)
+		if !validSubscriptionToken(token) {
+			return fmt.Errorf("matrix.subscriptionClients[%d].token must be 8-128 characters from [A-Za-z0-9._~-]", index)
+		}
+		if tokens[token] {
+			return fmt.Errorf("matrix.subscriptionClients contains duplicate token at index %d", index)
+		}
+		tokens[token] = true
+		if client.Count < 0 || client.Count > 256 {
+			return fmt.Errorf("matrix.subscriptionClients[%d].count must be between 0 and 256", index)
+		}
+		for _, list := range [][]string{client.Countries, client.Exclude} {
+			for _, code := range list {
+				code = strings.TrimSpace(code)
+				if len(code) != 2 {
+					return fmt.Errorf("matrix.subscriptionClients[%d] contains invalid country code %q", index, code)
+				}
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(client.Group)) {
+		case "", "country", "none":
+		default:
+			return fmt.Errorf("matrix.subscriptionClients[%d].group must be country or none", index)
+		}
+		switch strings.ToLower(strings.TrimSpace(client.Sort)) {
+		case "", "slot", "country", "name":
+		default:
+			return fmt.Errorf("matrix.subscriptionClients[%d].sort must be slot, country, or name", index)
+		}
+	}
+	return nil
+}
+
+func validSubscriptionToken(token string) bool {
+	if len(token) < 8 || len(token) > 128 {
+		return false
+	}
+	for _, symbol := range token {
+		switch {
+		case symbol >= 'a' && symbol <= 'z', symbol >= 'A' && symbol <= 'Z', symbol >= '0' && symbol <= '9':
+		case symbol == '.', symbol == '_', symbol == '~', symbol == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func positiveDuration(value string) (time.Duration, error) {

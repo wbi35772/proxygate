@@ -392,3 +392,34 @@ svg { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; s
   .country-picker { padding: .6rem; }
   .preview-list { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Subscription QR codes */
+.qr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; }
+.qr-card { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: .45rem; padding: .85rem; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.qr-card svg { width: 132px; height: 132px; border-radius: 5px; }
+.qr-card strong { color: var(--text); font-size: .64rem; text-align: center; }
+.qr-card .quiet-button { width: 100%; justify-content: center; }
+
+/* Per-client subscription tokens */
+.client-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: .75rem; }
+.client-card { display: flex; min-width: 0; flex-direction: column; gap: .55rem; padding: .8rem; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); }
+.client-card-head { display: flex; min-width: 0; align-items: center; gap: .5rem; }
+.client-card-head strong { overflow: hidden; flex: 1; color: var(--text); font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
+.client-card-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .5rem; }
+.client-card .field, .client-card .field input, .client-card .field select { min-width: 0; }
+.client-card .link-copy { flex-wrap: nowrap; }
+.client-card .link-copy input { min-width: 0; flex: 1; }
+.quiet-button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.quiet-button.danger:hover { background: var(--danger-soft); }
+.toggle-field.compact { padding: .45rem .55rem; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.client-urls { display: flex; min-width: 0; gap: .6rem; padding-top: .5rem; border-top: 1px dashed var(--border); align-items: flex-start; }
+.client-qr { flex: 0 0 auto; padding: .3rem; border: 1px solid var(--border); border-radius: 6px; background: #ffffff; }
+.client-qr svg { display: block; width: 104px; height: 104px; }
+.client-url-list { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: .45rem; }
+.client-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+
+@media (max-width: 760px) {
+  .client-grid { grid-template-columns: minmax(0, 1fr); }
+  .client-urls { flex-direction: column; }
+  .client-qr { align-self: center; }
+}

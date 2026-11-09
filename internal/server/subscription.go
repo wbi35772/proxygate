@@ -22,20 +22,61 @@ type subscriptionNode struct {
 }
 
 type subscriptionInfo struct {
-	Enabled       bool               `json:"enabled"`
-	V2RayURL      string             `json:"v2rayUrl"`
-	ClashURL      string             `json:"clashUrl"`
-	AutoURL       string             `json:"autoUrl"`
-	PublicHost    string             `json:"publicHost"`
-	Token         string             `json:"token"`
-	WebSocketPath string             `json:"websocketPath"`
-	TrojanPath    string             `json:"trojanPath"`
-	Protocol      string             `json:"protocol"`
-	UDP           bool               `json:"udp"`
-	Slots         map[string]int     `json:"slots"`
-	Countries     map[string]int     `json:"countries"`
-	Nodes         []subscriptionNode `json:"nodes"`
-	FrontProxy    frontProxySettings `json:"frontProxy"`
+	Enabled       bool                    `json:"enabled"`
+	V2RayURL      string                  `json:"v2rayUrl"`
+	ClashURL      string                  `json:"clashUrl"`
+	AutoURL       string                  `json:"autoUrl"`
+	PublicHost    string                  `json:"publicHost"`
+	Token         string                  `json:"token"`
+	WebSocketPath string                  `json:"websocketPath"`
+	TrojanPath    string                  `json:"trojanPath"`
+	Protocol      string                  `json:"protocol"`
+	UDP           bool                    `json:"udp"`
+	Slots         map[string]int          `json:"slots"`
+	Countries     map[string]int          `json:"countries"`
+	Nodes         []subscriptionNode      `json:"nodes"`
+	Clients       []subscriptionClient    `json:"clients"`
+	FrontProxy    frontProxySettings      `json:"frontProxy"`
+}
+
+type subscriptionClient struct {
+	Name      string   `json:"name"`
+	Token     string   `json:"token"`
+	Count     int      `json:"count"`
+	Countries []string `json:"countries"`
+	Exclude   []string `json:"exclude"`
+	Shuffle   bool     `json:"shuffle"`
+	Group     string   `json:"group"`
+	Sort      string   `json:"sort"`
+	V2RayURL  string   `json:"v2rayUrl"`
+	ClashURL  string   `json:"clashUrl"`
+	AutoURL   string   `json:"autoUrl"`
+}
+
+// subscriptionClientViews renders the per-client token list with ready-made
+// subscription URLs for the panel.
+func (s *Server) subscriptionClientViews(settings config.Matrix, host string) []subscriptionClient {
+	clients := make([]subscriptionClient, 0, len(settings.SubscriptionClients))
+	for _, client := range settings.SubscriptionClients {
+		view := subscriptionClient{
+			Name:      client.Name,
+			Token:     client.Token,
+			Count:     client.Count,
+			Countries: append([]string(nil), client.Countries...),
+			Exclude:   append([]string(nil), client.Exclude...),
+			Shuffle:   client.Shuffle,
+			Group:     client.Group,
+			Sort:      client.Sort,
+		}
+		if host != "" && client.Token != "" {
+			base := "https://" + host + "/sub/" + url.PathEscape(client.Token)
+			view.V2RayURL = base + "/v2ray"
+			view.ClashURL = base + "/clash"
+			view.AutoURL = base
+		}
+		clients = append(clients, view)
+	}
+	return clients
 }
 
 func (s *Server) subscription(c fiber.Ctx) error {
@@ -94,6 +135,7 @@ func (s *Server) subscription(c fiber.Ctx) error {
 		Slots:         slots,
 		Countries:     countries,
 		Nodes:         nodes,
+		Clients:       s.subscriptionClientViews(settings, host),
 		FrontProxy:    frontProxySettingsFrom(settings),
 	}
 	if host != "" && token != "" {

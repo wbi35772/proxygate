@@ -52,6 +52,20 @@ export interface FrontProxySettings {
   timeout: string
 }
 
+export interface SubscriptionClientInfo {
+  name: string
+  token: string
+  count: number
+  countries: string[]
+  exclude: string[]
+  shuffle: boolean
+  group: string
+  sort: string
+  v2rayUrl: string
+  clashUrl: string
+  autoUrl: string
+}
+
 export interface SubscriptionInfo {
   enabled: boolean
   v2rayUrl: string
@@ -66,6 +80,7 @@ export interface SubscriptionInfo {
   slots: { total: number; ready: number; switching: number; error: number }
   countries: Record<string, number>
   nodes: SubscriptionNode[]
+  clients: SubscriptionClientInfo[]
   frontProxy: FrontProxySettings
 }
 

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,10 +21,6 @@ type Server struct {
 	matrix *matrix.Manager
 	logger *log.Logger
 
-	mu          sync.RWMutex
-	slots       map[string]int
-	trojanSlots map[[trojanKeyLength]byte]int
-
 	cacheMu     sync.RWMutex
 	cachedNodes []trojanNode
 	cachedAt    time.Time
@@ -33,41 +30,48 @@ type Server struct {
 }
 
 func New(configStore *config.Store, matrixManager *matrix.Manager, logger *log.Logger) *Server {
-	server := &Server{
+	return &Server{
 		config: configStore,
 		matrix: matrixManager,
 		logger: logger,
 	}
-	server.rebuildSlots()
-	return server
 }
 
-func (s *Server) rebuildSlots() {
+// subscriptionTokens lists the primary token plus every per-client token.
+func (s *Server) subscriptionTokens() []string {
 	settings := s.config.Get().Matrix
-	token := settings.SubscriptionTokenValue()
-	slots := make(map[string]int, settings.Slots)
-	trojanSlots := make(map[[trojanKeyLength]byte]int, settings.Slots)
-	for id := 1; id <= settings.Slots; id++ {
-		uuid := slotUUID(token, id)
-		slots[uuid] = id
-		trojanSlots[trojanKey(uuid)] = id
+	tokens := make([]string, 0, len(settings.SubscriptionClients)+1)
+	tokens = append(tokens, settings.SubscriptionTokenValue())
+	for _, client := range settings.SubscriptionClients {
+		if token := strings.TrimSpace(client.Token); token != "" {
+			tokens = append(tokens, token)
+		}
 	}
-	s.mu.Lock()
-	s.slots = slots
-	s.trojanSlots = trojanSlots
-	s.mu.Unlock()
+	return tokens
 }
 
+// slotID resolves a VLESS uuid to a slot. The mapping is computed on demand so
+// adding or revoking a client token takes effect without a restart.
 func (s *Server) slotID(uuid string) (int, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, exists := s.slots[uuid]
-	return id, exists
+	settings := s.config.Get().Matrix
+	for _, token := range s.subscriptionTokens() {
+		for id := 1; id <= settings.Slots; id++ {
+			if slotUUID(token, id) == uuid {
+				return id, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (s *Server) trojanSlotID(key [trojanKeyLength]byte) (int, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, exists := s.trojanSlots[key]
-	return id, exists
+	settings := s.config.Get().Matrix
+	for _, token := range s.subscriptionTokens() {
+		for id := 1; id <= settings.Slots; id++ {
+			if trojanKey(slotUUID(token, id)) == key {
+				return id, true
+			}
+		}
+	}
+	return 0, false
 }

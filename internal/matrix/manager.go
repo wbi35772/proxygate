@@ -103,37 +103,41 @@ func (m *Manager) Start() error {
 	}
 	m.started = true
 	m.mu.Unlock()
-	if settings.Matrix.Autostart {
-		persisted := m.loadPersistedSlots()
-		go func() {
-			allocated := make(map[int]struct{}, len(persisted))
-			for _, entry := range persisted {
-				if m.ctx.Err() != nil {
-					return
-				}
-				if entry.SlotID < 1 || entry.SlotID > settings.Matrix.Slots {
-					continue
-				}
-				options := AllocateOptions{SlotID: entry.SlotID, Country: entry.Country, Protocol: entry.Protocol, Mode: entry.Mode}
-				if _, _, err := m.Allocate(options); err != nil {
-					m.logger.Printf("[matrix] restore slot=%d: %v", entry.SlotID, err)
-					continue
-				}
-				allocated[entry.SlotID] = struct{}{}
+	persisted := m.loadPersistedSlots()
+	go func() {
+		allocated := make(map[int]struct{}, len(persisted))
+		for _, entry := range persisted {
+			if m.ctx.Err() != nil {
+				return
 			}
-			for id := 1; id <= settings.Matrix.Slots; id++ {
-				if m.ctx.Err() != nil {
-					return
-				}
-				if _, exists := allocated[id]; exists {
-					continue
-				}
-				if _, _, err := m.Allocate(AllocateOptions{SlotID: id, Mode: ModeSticky}); err != nil {
-					m.logger.Printf("[matrix] autostart slot=%d: %v", id, err)
-				}
+			if entry.SlotID < 1 || entry.SlotID > settings.Matrix.Slots {
+				continue
 			}
-		}()
-	}
+			options := AllocateOptions{SlotID: entry.SlotID, Country: entry.Country, Protocol: entry.Protocol, Mode: entry.Mode}
+			if _, _, err := m.Allocate(options); err != nil {
+				m.logger.Printf("[matrix] restore slot=%d: %v", entry.SlotID, err)
+				continue
+			}
+			allocated[entry.SlotID] = struct{}{}
+		}
+		if len(allocated) > 0 {
+			m.logger.Printf("[matrix] restored %d persisted slot(s)", len(allocated))
+		}
+		if !settings.Matrix.Autostart {
+			return
+		}
+		for id := 1; id <= settings.Matrix.Slots; id++ {
+			if m.ctx.Err() != nil {
+				return
+			}
+			if _, exists := allocated[id]; exists {
+				continue
+			}
+			if _, _, err := m.Allocate(AllocateOptions{SlotID: id, Mode: ModeSticky}); err != nil {
+				m.logger.Printf("[matrix] autostart slot=%d: %v", id, err)
+			}
+		}
+	}()
 	m.logger.Printf("[matrix] started slots=%d ports=%d-%d", settings.Matrix.Slots, settings.Matrix.PortStart, settings.Matrix.PortStart+settings.Matrix.Slots-1)
 	return nil
 }

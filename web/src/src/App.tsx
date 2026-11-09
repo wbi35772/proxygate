@@ -1,11 +1,12 @@
 import type { TFunction } from 'i18next'
+import { QRCodeSVG } from 'qrcode.react'
 import type { ReactNode } from 'react'
 import { FormEvent, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { api } from './api'
 import { localeConfig, resolvedLocale } from './i18n'
-import type { Config, FrontProxySettings, Node, Protocol, Status, SubscriptionInfo, VersionInfo } from './types'
+import type { Config, FrontProxySettings, Node, Protocol, Status, SubscriptionClientInfo, SubscriptionInfo, VersionInfo } from './types'
 
 const protocolLabels: Record<Protocol, string> = {
   openvpn_udp: 'OpenVPN UDP',
@@ -568,7 +569,7 @@ function EmptyState({ query }: { query: string }) {
   return <div className="empty-state"><SearchIcon /><h3>{query ? t('nodes.noMatches') : t('nodes.noNodes')}</h3><p>{query ? t('nodes.shortenSearch') : t('nodes.refreshFirst')}</p></div>
 }
 
-type SubscriptionTab = 'links' | 'builder' | 'front'
+type SubscriptionTab = 'links' | 'clients' | 'builder' | 'front'
 
 function Subscription() {
   const { t } = useTranslation()
@@ -614,11 +615,12 @@ function Subscription() {
       <button className="quiet-button" disabled={loading} onClick={load}>{loading ? <Spinner /> : <RefreshIcon />}{t('subscription.refresh')}</button>
     </header>
     <nav className="sub-tabs" role="tablist" aria-label={t('subscription.tabs.label')}>
-      {(['links', 'builder', 'front'] as SubscriptionTab[]).map(value => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{t(`subscription.tabs.${value}`)}</button>)}
+      {(['links', 'clients', 'builder', 'front'] as SubscriptionTab[]).map(value => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{t(`subscription.tabs.${value}`)}</button>)}
     </nav>
     {error && <Notice tone="danger">{error}</Notice>}
     {info && !info.enabled && <Notice tone="warning">{t('subscription.disabled')}</Notice>}
     {info && info.enabled && tab === 'links' && <SubscriptionLinks info={info} copy={copy} copied={copied} />}
+    {info && tab === 'clients' && <SubscriptionClients info={info} copy={copy} copied={copied} onChanged={load} />}
     {info && tab === 'builder' && <SubscriptionBuilder info={info} copy={copy} copied={copied} />}
     {info && tab === 'front' && <FrontProxyPanel initial={info.frontProxy} onSaved={load} />}
   </div>
@@ -636,13 +638,27 @@ function LinkField({ fieldKey, label, hint, value, copied, copy }: { fieldKey: s
 
 function SubscriptionLinks({ info, copy, copied }: { info: SubscriptionInfo; copy: (key: string, value: string) => void; copied: string }) {
   const { t } = useTranslation()
+  const qrValues = [
+    { key: 'v2ray', label: t('subscription.v2rayLabel'), value: info.v2rayUrl },
+    { key: 'clash', label: t('subscription.clashLabel'), value: info.clashUrl },
+    { key: 'auto', label: t('subscription.autoLabel'), value: info.autoUrl },
+  ].filter(entry => entry.value)
   return <>
     <SettingsSection index="01" title={t('subscription.linksTitle')} description={t('subscription.linksDescription')}>
       <LinkField fieldKey="v2ray" label={t('subscription.v2rayLabel')} hint={t('subscription.v2rayHint')} value={info.v2rayUrl} copied={copied} copy={copy} />
       <LinkField fieldKey="clash" label={t('subscription.clashLabel')} hint={t('subscription.clashHint')} value={info.clashUrl} copied={copied} copy={copy} />
       <LinkField fieldKey="auto" label={t('subscription.autoLabel')} hint={t('subscription.autoHint')} value={info.autoUrl} copied={copied} copy={copy} />
     </SettingsSection>
-    <SettingsSection index="02" title={t('subscription.detailTitle')} description={t('subscription.detailDescription')}>
+    {qrValues.length > 0 && <SettingsSection index="02" title={t('subscription.qrTitle')} description={t('subscription.qrHint')}>
+      <div className="qr-grid wide">
+        {qrValues.map(entry => <article className="qr-card" key={entry.key}>
+          <QRCodeSVG value={entry.value} size={132} level="M" marginSize={2} bgColor="#ffffff" fgColor="#111827" />
+          <strong>{entry.label}</strong>
+          <button type="button" className="quiet-button" onClick={() => copy(`qr-${entry.key}`, entry.value)}>{copied === `qr-${entry.key}` ? t('subscription.copied') : t('subscription.copy')}</button>
+        </article>)}
+      </div>
+    </SettingsSection>}
+    <SettingsSection index={qrValues.length > 0 ? '03' : '02'} title={t('subscription.detailTitle')} description={t('subscription.detailDescription')}>
       <Field label={t('subscription.protocol')}><input readOnly value={`Trojan · WebSocket · TLS${info.udp ? ' · UDP' : ''}`} /></Field>
       <Field label={t('subscription.wsPath')}><input readOnly value={info.trojanPath} /></Field>
       <Field label={t('subscription.publicHost')}><input readOnly value={info.publicHost || '—'} /></Field>
@@ -729,6 +745,134 @@ function SubscriptionBuilder({ info, copy, copied }: { info: SubscriptionInfo; c
       <LinkField fieldKey="builder-clash" label={t('subscription.clashLabel')} hint={t('subscription.builderUrlHint')} value={clashUrl} copied={copied} copy={copy} />
       <p className="section-note wide">{t('subscription.builderNote')}</p>
     </SettingsSection>
+  </>
+}
+
+type ClientDraft = {
+  name: string
+  token: string
+  count: number
+  countries: string
+  exclude: string
+  shuffle: boolean
+  group: string
+  sort: string
+}
+
+function randomClientToken() {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = new Uint8Array(24)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, byte => alphabet[byte % alphabet.length]).join('')
+}
+
+function clientDraftFrom(client: SubscriptionClientInfo): ClientDraft {
+  return {
+    name: client.name,
+    token: client.token,
+    count: client.count,
+    countries: client.countries.join(','),
+    exclude: client.exclude.join(','),
+    shuffle: client.shuffle,
+    group: client.group || 'country',
+    sort: client.sort,
+  }
+}
+
+function splitCountryCodes(raw: string) {
+  return raw.split(/[\s,;|]+/).map(code => code.trim().toUpperCase()).filter(code => code.length === 2)
+}
+
+function SubscriptionClients({ info, copy, copied, onChanged }: { info: SubscriptionInfo; copy: (key: string, value: string) => void; copied: string; onChanged: () => void }) {
+  const { t } = useTranslation()
+  const [drafts, setDrafts] = useState<ClientDraft[]>(() => info.clients.map(clientDraftFrom))
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setDrafts(info.clients.map(clientDraftFrom))
+  }, [info.clients])
+
+  const savedByToken = useMemo(() => new Map(info.clients.map(client => [client.token, client])), [info.clients])
+  const update = (index: number, patch: Partial<ClientDraft>) => setDrafts(current => current.map((draft, position) => position === index ? { ...draft, ...patch } : draft))
+  const add = () => setDrafts(current => [...current, { name: `client-${current.length + 1}`, token: randomClientToken(), count: 0, countries: '', exclude: '', shuffle: false, group: 'country', sort: '' }])
+  const remove = (index: number) => setDrafts(current => current.filter((_, position) => position !== index))
+
+  const save = async () => {
+    setSaving(true)
+    setError('')
+    setMessage('')
+    try {
+      await api.put('/api/subscription/clients', {
+        clients: drafts.map(draft => ({
+          name: draft.name.trim(),
+          token: draft.token.trim(),
+          count: Math.max(0, draft.count),
+          countries: splitCountryCodes(draft.countries),
+          exclude: splitCountryCodes(draft.exclude),
+          shuffle: draft.shuffle,
+          group: draft.group,
+          sort: draft.sort,
+        })),
+      })
+      setMessage(t('subscription.clientSaved'))
+      onChanged()
+    } catch (reason) {
+      setError(errorMessage(reason))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <>
+    <SettingsSection index="01" title={t('subscription.clientsTitle')} description={t('subscription.clientsDescription')}>
+      {drafts.length === 0 && <p className="muted-line wide">{t('subscription.clientEmpty')}</p>}
+      <div className="client-grid wide">
+        {drafts.map((draft, index) => {
+          const saved = savedByToken.get(draft.token.trim())
+          return <article className="client-card" key={`${draft.token}-${index}`}>
+            <div className="client-card-head">
+              <strong>{draft.name || t('subscription.clientName')}</strong>
+              <button type="button" className="quiet-button danger" onClick={() => remove(index)}>{t('subscription.clientRemove')}</button>
+            </div>
+            <Field label={t('subscription.clientName')}><input value={draft.name} onChange={event => update(index, { name: event.target.value })} /></Field>
+            <Field label={t('subscription.clientToken')}>
+              <div className="link-copy">
+                <input value={draft.token} onChange={event => update(index, { token: event.target.value })} />
+                <button type="button" className="quiet-button" onClick={() => update(index, { token: randomClientToken() })}>{t('subscription.clientGenerate')}</button>
+              </div>
+            </Field>
+            <div className="client-card-row">
+              <Field label={t('subscription.clientCount')}><input type="number" min={0} max={256} value={draft.count} onChange={event => update(index, { count: Math.max(0, Number(event.target.value) || 0) })} /></Field>
+              <Field label={t('subscription.clientGroup')}><select value={draft.group} onChange={event => update(index, { group: event.target.value })}><option value="country">{t('subscription.builderGroup')}</option><option value="none">{t('subscription.clientDefault')}</option></select></Field>
+              <Field label={t('subscription.clientSort')}><select value={draft.sort} onChange={event => update(index, { sort: event.target.value })}><option value="">{t('subscription.builderSortDefault')}</option><option value="country">{t('subscription.builderSortCountry')}</option><option value="name">{t('subscription.builderSortName')}</option></select></Field>
+            </div>
+            <div className="client-card-row">
+              <Field label={t('subscription.clientCountries')}><input placeholder="JP,KR" value={draft.countries} onChange={event => update(index, { countries: event.target.value })} /></Field>
+              <Field label={t('subscription.clientExclude')}><input placeholder="US,RU" value={draft.exclude} onChange={event => update(index, { exclude: event.target.value })} /></Field>
+            </div>
+            <label className="toggle-field compact"><input type="checkbox" checked={draft.shuffle} onChange={event => update(index, { shuffle: event.target.checked })} /><span><strong>{t('subscription.clientShuffle')}</strong><small>{t('subscription.builderShuffleHint')}</small></span></label>
+            {saved && saved.v2rayUrl && <div className="client-urls">
+              <div className="client-qr"><QRCodeSVG value={saved.autoUrl || saved.v2rayUrl} size={104} level="M" marginSize={2} bgColor="#ffffff" fgColor="#111827" /></div>
+              <div className="client-url-list">
+                <LinkField fieldKey={`client-${index}-v2ray`} label={t('subscription.v2rayLabel')} hint={t('subscription.clientUrls')} value={saved.v2rayUrl} copied={copied} copy={copy} />
+                <LinkField fieldKey={`client-${index}-clash`} label={t('subscription.clashLabel')} hint={t('subscription.clientUrls')} value={saved.clashUrl} copied={copied} copy={copy} />
+              </div>
+            </div>}
+          </article>
+        })}
+      </div>
+      <p className="section-note wide">{t('subscription.clientHint')}</p>
+    </SettingsSection>
+    {error && <Notice tone="danger">{error}</Notice>}
+    <div className="settings-actions">
+      <div><strong>{message || t('subscription.clientsTitle')}</strong><small>{t('subscription.clientsDescription')}</small></div>
+      <div className="client-actions">
+        <button className="quiet-button" type="button" onClick={add}>{t('subscription.clientAdd')}</button>
+        <button className="primary-button" type="button" disabled={saving} onClick={save}>{saving ? <Spinner /> : null}{t('subscription.clientSave')}</button>
+      </div>
+    </div>
   </>
 }
 

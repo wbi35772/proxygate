@@ -1,7 +1,6 @@
 package subscription
 
 import (
-	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -18,8 +17,8 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 	settings := s.config.Get().Matrix
 	rest := strings.TrimPrefix(r.URL.Path, "/sub/")
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	token := parts[0]
-	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(settings.SubscriptionTokenValue())) != 1 {
+	matchedToken, client := settings.MatchSubscriptionToken(parts[0])
+	if matchedToken == "" {
 		http.NotFound(writer, r)
 		return
 	}
@@ -38,6 +37,10 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 		trojanPath = "/pgtrojan"
 	}
 	options := nodeOptionsFromQuery(r.URL.Query())
+	if client != nil {
+		options = applyClientPresets(options, *client)
+	}
+	options.applyDefaults()
 	all := make([]trojanNode, 0, len(statuses))
 	for _, status := range statuses {
 		if status.State != "ready" || status.ExitIP == "" {
@@ -46,7 +49,7 @@ func (s *Server) handleSubscription(writer http.ResponseWriter, r *http.Request)
 		all = append(all, trojanNode{
 			name:     nodeName(status),
 			country:  strings.ToUpper(firstNonEmpty(status.CountryShort, status.Country)),
-			password: slotUUID(settings.SubscriptionTokenValue(), status.SlotID),
+			password: slotUUID(matchedToken, status.SlotID),
 			host:     host,
 			port:     port,
 			tls:      tls,

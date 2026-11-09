@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ExpTechTW/proxygate/internal/config"
 )
 
 type nodeOptions struct {
@@ -33,13 +35,54 @@ func nodeOptionsFromQuery(query url.Values) nodeOptions {
 	if count, err := strconv.Atoi(strings.TrimSpace(query.Get("count"))); err == nil {
 		options.count = count
 	}
+	return options
+}
+
+// applyClientPresets folds a per-client preset into the request options.
+// Explicit query parameters always win; presets only fill empty slots.
+func applyClientPresets(options nodeOptions, client config.SubscriptionClient) nodeOptions {
+	if options.count <= 0 && client.Count > 0 {
+		options.count = client.Count
+	}
+	if len(options.countries) == 0 && len(client.Countries) > 0 {
+		options.countries = parseCountryList(client.Countries)
+	}
+	if len(options.exclude) == 0 && len(client.Exclude) > 0 {
+		options.exclude = parseCountryList(client.Exclude)
+	}
+	if client.Shuffle {
+		options.shuffle = true
+	}
+	if options.group == "" {
+		options.group = strings.ToLower(strings.TrimSpace(client.Group))
+	}
+	if options.sortBy == "" {
+		options.sortBy = strings.ToLower(strings.TrimSpace(client.Sort))
+	}
+	return options
+}
+
+func (options *nodeOptions) applyDefaults() {
 	if options.group == "" {
 		options.group = "country"
 	}
 	if options.sortBy == "" {
 		options.sortBy = "slot"
 	}
-	return options
+}
+
+func parseCountryList(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		code := strings.ToUpper(strings.TrimSpace(value))
+		if len(code) == 2 {
+			set[code] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
 }
 
 func parseCountrySet(raw string) map[string]struct{} {
